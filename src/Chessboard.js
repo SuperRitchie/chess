@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import './index.css';
+import './ChessPiece.js';
 
 const Chessboard = () => {
     // Define the initial state for the selected square
@@ -76,7 +77,7 @@ const Chessboard = () => {
                         >
                             {/* Render the piece here */}
                             {pieces[`${x}-${y}`] && (
-                                <span className={`chess-piece chess-piece--${pieces[`${x}-${y}`].color}`}>
+                                <span className={`chess-piece chess-piece--${pieces[x + '-' + y].color}`}>
                                     {pieces[`${x}-${y}`].type === 'pawn' && '♙'}
                                     {pieces[`${x}-${y}`].type === 'rook' && '♖'}
                                     {pieces[`${x}-${y}`].type === 'knight' && '♘'}

@@ -2,6 +2,9 @@
     width: 80%;
     height: 80%;
     margin: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
   
   .chess-piece path {
@@ -11,8 +14,9 @@
   .chess-piece--black path {
     fill: #000;
   }
-  
+
+  /*
   .chess-piece--white {
     transform: rotate(180deg);
   }
-  
+  */
