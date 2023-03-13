@@ -79,8 +79,6 @@ const ChessBoard = () => {
                         >
                             {/* Render the piece here */}
                             <ChessPiece piece={pieces[`${x}-${y}`]} />
-
-
                         </div>
                     ))}
                 </div>
