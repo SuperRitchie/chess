@@ -1,5 +1,7 @@
 import React from 'react';
 import './ChessPiece.css';
+import { ReactSVG } from 'react-svg';
+
 
 // Create a ChessPiece component
 // svg chess pieces from https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces
@@ -7,15 +9,10 @@ import './ChessPiece.css';
 
 function ChessPiece({ piece }) {
     const pieceName = piece ? `${piece.color}-${piece.type}` : '';
-    const pieceSrc = piece ? `assets/${pieceName}.svg` : '';
-
-    console.log(pieceSrc);
-    console.log(pieceName);
-
-
+    const pieceSrc = piece ? `${pieceName}.svg` : '';
     return (
         <div className="chess-piece">
-            {piece && <img src={pieceSrc} alt={pieceName} />}
+            {piece && <ReactSVG src={pieceSrc} alt={pieceName} />}
         </div>
     );
 }

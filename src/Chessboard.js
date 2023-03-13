@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import './index.css';
 import ChessPiece from './ChessPiece';
 
+
 const Chessboard = () => {
     // Define the initial state for the selected square
     const [selectedSquare, setSelectedSquare] = useState(null);
