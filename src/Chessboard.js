@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import './index.css';
-import './ChessPiece.js';
+import ChessPiece from './ChessPiece';
 
 const Chessboard = () => {
     // Define the initial state for the selected square
@@ -74,19 +74,10 @@ const Chessboard = () => {
                                 ${selectedSquare && selectedSquare.x === x && selectedSquare.y === y && !pieces[`${x}-${y}`] ? 'chessboard-square--empty' : ''}
                                     `}
                             onClick={() => handleSquareClick(x, y)}
-                            
+
                         >
                             {/* Render the piece here */}
-                            {pieces[`${x}-${y}`] && (
-                                <span className={`chess-piece chess-piece--${pieces[x + '-' + y].color}`}>
-                                    {pieces[`${x}-${y}`].type === 'pawn' && '♙'}
-                                    {pieces[`${x}-${y}`].type === 'rook' && '♖'}
-                                    {pieces[`${x}-${y}`].type === 'knight' && '♘'}
-                                    {pieces[`${x}-${y}`].type === 'bishop' && '♗'}
-                                    {pieces[`${x}-${y}`].type === 'queen' && '♕'}
-                                    {pieces[`${x}-${y}`].type === 'king' && '♔'}
-                                </span>
-                            )}
+                            <ChessPiece piece={pieces[`${x}-${y}`]} />
 
 
                         </div>

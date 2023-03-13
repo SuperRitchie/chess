@@ -7,7 +7,11 @@ import './ChessPiece.css';
 
 function ChessPiece({ piece }) {
     const pieceName = piece ? `${piece.color}-${piece.type}` : '';
-    const pieceSrc = piece ? `/assets/${pieceName}.svg` : '';
+    const pieceSrc = piece ? `assets/${pieceName}.svg` : '';
+
+    console.log(pieceSrc);
+    console.log(pieceName);
+
 
     return (
         <div className="chess-piece">
