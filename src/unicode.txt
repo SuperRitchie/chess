@@ -1,0 +1,11 @@
+                            {/* Render the piece here */}
+                            {pieces[`${x}-${y}`] && (
+                                <span className={`chess-piece chess-piece--${pieces[x + '-' + y].color}`}>
+                                    {pieces[`${x}-${y}`].type === 'pawn' && '♙'}
+                                    {pieces[`${x}-${y}`].type === 'rook' && '♖'}
+                                    {pieces[`${x}-${y}`].type === 'knight' && '♘'}
+                                    {pieces[`${x}-${y}`].type === 'bishop' && '♗'}
+                                    {pieces[`${x}-${y}`].type === 'queen' && '♕'}
+                                    {pieces[`${x}-${y}`].type === 'king' && '♔'}
+                                </span>
+                            )}

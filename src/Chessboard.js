@@ -74,6 +74,7 @@ const Chessboard = () => {
                                 ${selectedSquare && selectedSquare.x === x && selectedSquare.y === y && !pieces[`${x}-${y}`] ? 'chessboard-square--empty' : ''}
                                     `}
                             onClick={() => handleSquareClick(x, y)}
+                            
                         >
                             {/* Render the piece here */}
                             {pieces[`${x}-${y}`] && (
