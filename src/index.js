@@ -1,5 +1,5 @@
 import React from 'react';
-import Chessboard from './Chessboard';
+import ChessBoard from './ChessBoard';
 import './index.css';
 import { createRoot } from 'react-dom/client';
 
@@ -8,6 +8,6 @@ const root = createRoot(domNode);
 
 root.render(
   <React.StrictMode>
-    <Chessboard />
+    <ChessBoard />
   </React.StrictMode>
 );

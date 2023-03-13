@@ -3,7 +3,7 @@ import './index.css';
 import ChessPiece from './ChessPiece';
 
 
-const Chessboard = () => {
+const ChessBoard = () => {
     // Define the initial state for the selected square
     const [selectedSquare, setSelectedSquare] = useState(null);
 
@@ -90,4 +90,4 @@ const Chessboard = () => {
     );
 };
 
-export default Chessboard;
+export default ChessBoard;
