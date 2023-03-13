@@ -2,14 +2,12 @@
 .chessboard {
   display: flex;
   flex-wrap: wrap;
-  width: 400px;
-  height: 400px;
+  height: 100vh;
+  width: 100vw;
 
   flex-direction: row;
   justify-content: center;
   align-items: center;
-  height: 100vh;
-  width: 100vw;
 }
 
 body {
@@ -42,6 +40,11 @@ body {
 /* Styles for the selected square */
 .chessboard-square--selected {
   background-color: #0070f3;
+  color: #fff;
+}
+
+.chessboard-square--empty {
+  background-color: #08e555;
   color: #fff;
 }
 

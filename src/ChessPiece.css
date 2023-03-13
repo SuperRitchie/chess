@@ -1,0 +1,18 @@
+.chess-piece {
+    width: 80%;
+    height: 80%;
+    margin: auto;
+  }
+  
+  .chess-piece path {
+    fill: #fff;
+  }
+  
+  .chess-piece--black path {
+    fill: #000;
+  }
+  
+  .chess-piece--white {
+    transform: rotate(180deg);
+  }
+  
