@@ -59,6 +59,26 @@ const ChessBoard = () => {
         }
     };
 
+    // Define a helper function to handle drag start events
+    function handleOnDrag(e, x, y) {
+        e.dataTransfer.setData('text/plain', `${x}-${y}`);
+    }
+
+    // Define a helper function to handle drag over events
+    function handleDragOver(e) {
+        e.preventDefault();
+        console.log('drag over');
+    }
+
+    // Define a helper function to handle drop events
+    function handleOnDrop(e, x, y) {
+        const [oldX, oldY] = e.dataTransfer.getData('text/plain').split('-');
+        const newPieces = { ...pieces };
+        newPieces[`${x}-${y}`] = newPieces[`${oldX}-${oldY}`];
+        delete newPieces[`${oldX}-${oldY}`];
+        setPieces(newPieces);
+    }
+
     // Render the chessboard layout
     return (
         <div className="chessboard">
@@ -76,9 +96,17 @@ const ChessBoard = () => {
                                     `}
                             onClick={() => handleSquareClick(x, y)}
 
+                            onDrop={(e) => handleOnDrop(e, x, y)}
+                            onDragOver={(e) => handleDragOver(e)}
+
                         >
                             {/* Render the piece here */}
-                            <ChessPiece piece={pieces[`${x}-${y}`]} />
+                            <div className="chesspiece-wrapper"
+                                draggable={true}
+                                onDragStart={(e) => handleOnDrag(e, x, y)}
+                            >
+                                <ChessPiece piece={pieces[`${x}-${y}`]} />
+                            </div>
                         </div>
                     ))}
                 </div>
