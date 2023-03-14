@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import './index.css';
 import ChessPiece from './ChessPiece';
+import move_sound from './assets/move.mp3';
+import check from './assets/check.mp3';
 
 
 const ChessBoard = () => {
@@ -76,6 +78,13 @@ const ChessBoard = () => {
         newPieces[`${x}-${y}`] = newPieces[`${oldX}-${oldY}`];
         delete newPieces[`${oldX}-${oldY}`];
         setPieces(newPieces);
+        playSound(move_sound);
+    }
+
+    // create a function to play sound based on audio file
+    const playSound = (audioFile) => {
+        const audio = new Audio(audioFile);
+        audio.play();
     }
 
     // Render the chessboard layout
