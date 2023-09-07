@@ -1,7 +1,7 @@
 {
   "files": {
     "main.css": "/chess/static/css/main.b54ebc7e.css",
-    "main.js": "/chess/static/js/main.d6f455e1.js",
+    "main.js": "/chess/static/js/main.8a8be770.js",
     "static/media/move.mp3": "/chess/static/media/move.ff0e7615887c5bf5f7dd.mp3",
     "static/media/black-rook.svg": "/chess/static/media/black-rook.11b82bbd54650e60c08608b80aa3b8cc.svg",
     "static/media/black-knight.svg": "/chess/static/media/black-knight.7930be9e07b51bc0e069b1d77e31261a.svg",
@@ -18,10 +18,10 @@
     "static/media/white-king.svg": "/chess/static/media/white-king.087bee858f22f327e1429943cf321c2f.svg",
     "index.html": "/chess/index.html",
     "main.b54ebc7e.css.map": "/chess/static/css/main.b54ebc7e.css.map",
-    "main.d6f455e1.js.map": "/chess/static/js/main.d6f455e1.js.map"
+    "main.8a8be770.js.map": "/chess/static/js/main.8a8be770.js.map"
   },
   "entrypoints": [
     "static/css/main.b54ebc7e.css",
-    "static/js/main.d6f455e1.js"
+    "static/js/main.8a8be770.js"
   ]
 }
