@@ -47,22 +47,28 @@ export function isLegalMove(pieces, from, to, isWhiteTurn) {
 
   switch (mover.type) {
     case 'pawn': {
-      const dir = mover.color === 'white' ? -1 : 1; // white moves up (y decreases)
-      const startRank = mover.color === 'white' ? 6 : 1;
+      const dir = mover.color === 'white' ? -1 : 1;   // white moves toward smaller x
+      const startRow = mover.color === 'white' ? 6 : 1;
 
-      // simple 1-step
-      if (dx === 0 && dy === dir && !dest) return true;
+      // forward empty?
+      if (dx === dir && dy === 0 && !dest) return true;
 
-      // 2-step from start if clear
-      if (dx === 0 && dy === 2 * dir && y1 === startRank && !dest && !getPiece(pieces, x1, y1 + dir))
-        return true;
+      // double from start (both squares must be empty)
+      if (
+        dx === 2 * dir &&
+        dy === 0 &&
+        x1 === startRow &&
+        !dest &&
+        !getPiece(pieces, x1 + dir, y1)
+      ) return true;
 
-      // capture
-      if (ady === dir && adx === 1 && dest && dest.color !== mover.color) return true;
+      // diagonal capture
+      if (dx === dir && Math.abs(dy) === 1 && dest && dest.color !== mover.color) return true;
 
-      // no en passant or promotion logic yet
-      return false;
+      return false; // (no en passant/promo here)
     }
+
+
     case 'rook':
       return rookLike(pieces, x1, y1, x2, y2);
     case 'bishop':
