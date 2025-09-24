@@ -9,6 +9,7 @@ import { isLegalMove, makeMove, getPiece } from './chessRules';
 const ChessBoard = () => {
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [isWhiteTurn, setIsWhiteTurn] = useState(true);
+  const [legalMoves, setLegalMoves] = useState([]); // [{x,y,capture:boolean}]
 
   const [pieces, setPieces] = useState({
     '0-0': { color: 'black', type: 'rook' },
@@ -47,35 +48,73 @@ const ChessBoard = () => {
 
   const isBlackSquare = (x, y) => ((x + y) % 2 === 1);
 
-  const handleSquareClick = (x, y) => {
-    if (selectedSquare && selectedSquare.x === x && selectedSquare.y === y) {
-      setSelectedSquare(null);
-    } else {
-      setSelectedSquare({ x, y });
+  const computeLegalMoves = (fromX, fromY) => {
+    const res = [];
+    for (let ty = 0; ty < 8; ty++) {
+      for (let tx = 0; tx < 8; tx++) {
+        const from = { x: fromX, y: fromY };
+        const to = { x: tx, y: ty };
+        if (isLegalMove(pieces, from, to, isWhiteTurn)) {
+          const targetPiece = getPiece(pieces, tx, ty);
+          res.push({ x: tx, y: ty, capture: !!targetPiece });
+        }
+      }
     }
+    return res;
+  };
+
+  const clearSelection = () => {
+    setSelectedSquare(null);
+    setLegalMoves([]);
+  };
+
+  const handleSquareClick = (x, y) => {
+    const piece = getPiece(pieces, x, y);
+
+    // Clicking the selected square toggles off
+    if (selectedSquare && selectedSquare.x === x && selectedSquare.y === y) {
+      clearSelection();
+      return;
+    }
+
+    // If you click a piece of the side to move: select and show moves
+    if (piece && ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black'))) {
+      setSelectedSquare({ x, y });
+      setLegalMoves(computeLegalMoves(x, y));
+      return;
+    }
+
+    // Otherwise (empty square or opponent piece) just update selection if a move isn't being executed by click.
+    // (Drag/drop still handles the actual move.)
+    setSelectedSquare(null);
+    setLegalMoves([]);
   };
 
   const handleOnDrag = (e, x, y) => {
     const piece = getPiece(pieces, x, y);
     if (!piece) { e.preventDefault(); return; }
-    // Only allow dragging the side to move
     if ((isWhiteTurn && piece.color !== 'white') || (!isWhiteTurn && piece.color !== 'black')) {
       e.preventDefault();
       return;
     }
+    // show moves on drag start too (nice UX)
+    setSelectedSquare({ x, y });
+    setLegalMoves(computeLegalMoves(x, y));
+
     e.dataTransfer.setData('position', `${x}-${y}`);
   };
 
   const handleDragOver = (e) => e.preventDefault();
 
   const handleOnDrop = (e, x, y) => {
-    const [oldX, oldY] = e.dataTransfer.getData('position').split('-').map(Number);
+    const data = e.dataTransfer.getData('position');
+    if (!data) return;
+    const [oldX, oldY] = data.split('-').map(Number);
     const from = { x: oldX, y: oldY };
     const to = { x, y };
 
     if (!isLegalMove(pieces, from, to, isWhiteTurn)) {
-        playSound(check);
-      // add error sound
+      playSound(check); // error sound for illegal attempt
       return;
     }
 
@@ -83,14 +122,16 @@ const ChessBoard = () => {
     setPieces(newPieces);
     setIsWhiteTurn((t) => !t);
     playSound(move_sound);
-
-    // check if player is in check --> if (isCheck(newPieces, isWhiteTurn ? 'black' : 'white')) playSound(check);
+    clearSelection();
   };
 
   const playSound = (audioFile) => {
     const audio = new Audio(audioFile);
     audio.play();
   };
+
+  // Helper to see if a square is a legal target (and if it's a capture)
+  const legalForSquare = (x, y) => legalMoves.find(m => m.x === x && m.y === y);
 
   return (
     <div className="chessboard">
@@ -99,10 +140,18 @@ const ChessBoard = () => {
           {Array.from({ length: 8 }, (_, x) => {
             const piece = getPiece(pieces, x, y);
             const selected = selectedSquare && selectedSquare.x === x && selectedSquare.y === y;
+            const lm = legalForSquare(x, y);
+            const isCapture = lm?.capture;
+
             return (
               <div
                 key={`${x}-${y}`}
-                className={`chessboard-square ${isBlackSquare(x, y) ? 'chessboard-square--black' : 'chessboard-square--white'} ${selected ? 'chessboard-square--selected' : ''}`}
+                className={[
+                  'chessboard-square',
+                  isBlackSquare(x, y) ? 'chessboard-square--black' : 'chessboard-square--white',
+                  selected ? 'chessboard-square--selected' : '',
+                  lm ? (isCapture ? 'chessboard-square--legal-capture' : 'chessboard-square--legal-move') : ''
+                ].join(' ')}
                 onClick={() => handleSquareClick(x, y)}
                 onDrop={(e) => handleOnDrop(e, x, y)}
                 onDragOver={handleDragOver}

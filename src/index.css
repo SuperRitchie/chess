@@ -64,3 +64,40 @@ body {
 .chessboard-piece--black {
   color: #b58863;
 }
+
+/* --- Legal move highlights --- */
+.chessboard-square--legal-move {
+  position: relative;
+}
+.chessboard-square--legal-move::after {
+  content: "";
+  position: absolute;
+  width: 20%;
+  height: 20%;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  /* small centered dot */
+  background: rgba(0, 128, 0, 0.55);
+  pointer-events: none;
+}
+
+.chessboard-square--legal-capture {
+  position: relative;
+}
+.chessboard-square--legal-capture::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 8px;
+  /* ring for captures */
+  box-shadow: 0 0 0 4px rgba(220, 20, 60, 0.6) inset;
+  pointer-events: none;
+}
+
+/* Keep selected square clearly visible on top of highlight */
+.chessboard-square--selected {
+  background-color: #0070f3;
+  color: #fff;
+}
