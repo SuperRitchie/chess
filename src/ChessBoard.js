@@ -46,8 +46,6 @@ const ChessBoard = () => {
     '7-7': { color: 'white', type: 'rook' },
   });
 
-  const isBlackSquare = (x, y) => ((x + y) % 2 === 1);
-
   const computeLegalMoves = (fromX, fromY) => {
     const res = [];
     for (let ty = 0; ty < 8; ty++) {
