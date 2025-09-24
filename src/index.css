@@ -181,3 +181,19 @@ body {
   font-size: 13px;
   line-height: 1.35;
 }
+
+.mode-row {
+  display: grid;
+  grid-template-columns: 60px 1fr;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+  background: #fff;
+}

@@ -290,3 +290,29 @@ export function hasAnyLegalMove(pieces, color, enPassantTarget = null) {
   }
   return false;
 }
+
+export function listLegalMoves(pieces, color, enPassantTarget = null) {
+  const isWhiteTurn = (color === 'white');
+  const moves = [];
+  for (let x1 = 0; x1 < 8; x1++) {
+    for (let y1 = 0; y1 < 8; y1++) {
+      const p = getPiece(pieces, x1, y1);
+      if (!p || p.color !== color) continue;
+      for (let x2 = 0; x2 < 8; x2++) {
+        for (let y2 = 0; y2 < 8; y2++) {
+          if (isLegalMove(pieces, { x: x1, y: y1 }, { x: x2, y: y2 }, isWhiteTurn, enPassantTarget)) {
+            const target = getPiece(pieces, x2, y2);
+            const needsPromotion = p.type === 'pawn' && (x2 === 0 || x2 === 7);
+            moves.push({
+              from: { x: x1, y: y1 },
+              to: { x: x2, y: y2 },
+              capture: !!target,
+              needsPromotion
+            });
+          }
+        }
+      }
+    }
+  }
+  return moves;
+}

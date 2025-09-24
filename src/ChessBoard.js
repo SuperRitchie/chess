@@ -1,27 +1,31 @@
 // src/ChessBoard.jsx
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import './index.css';
 import ChessPiece from './ChessPiece';
 import move_sound from './assets/move.mp3';
 import check from './assets/check.mp3';
 import { isLegalMove, makeMove, getPiece, isKingInCheck, hasAnyLegalMove } from './chessRules';
+import { pickRandomMove } from './randomAI';
+import { pickMCTSMove } from './mctsAI';
 
 const initPiece = (color, type) => ({ color, type, hasMoved: false });
 
-// --- Algebraic helpers ---
+// --- Algebraic helpers for SAN/PGN ---
 const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
 const fileOf = (y) => files[y];
 const rankOf = (x) => String(8 - x);
 const sq = (x, y) => `${fileOf(y)}${rankOf(x)}`;
+const pieceLetter = { pawn: '', knight: 'N', bishop: 'B', rook: 'R', queen: 'Q', king: 'K' };
+const enemy = (c) => (c === 'white' ? 'black' : 'white');
 
 export default function ChessBoard() {
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [isWhiteTurn, setIsWhiteTurn] = useState(true);
-  const [legalMoves, setLegalMoves] = useState([]); // [{x,y,capture:boolean}]
-  const [promotionPending, setPromotionPending] = useState(null); // {from,to,color,nextTurnIsWhite,prevPieces,prevEnPassant}
+  const [legalMoves, setLegalMoves] = useState([]);
+  const [promotionPending, setPromotionPending] = useState(null);
   const [frozenForPromotion, setFrozenForPromotion] = useState(false);
-  const [enPassantTarget, setEnPassantTarget] = useState(null);   // {x,y} or null
-  const [movesSAN, setMovesSAN] = useState([]); // flat list: ["e4","e5","Nf3",...]
+  const [enPassantTarget, setEnPassantTarget] = useState(null);
+  const [movesSAN, setMovesSAN] = useState([]);
   const [pieces, setPieces] = useState({
     '0-0': initPiece('black', 'rook'),
     '0-1': initPiece('black', 'knight'),
@@ -57,30 +61,13 @@ export default function ChessBoard() {
     '7-7': initPiece('white', 'rook'),
   });
 
-  // --- UI bits ---
+  const [whiteMode, setWhiteMode] = useState('human'); // 'human' | 'random' | 'mcts'
+  const [blackMode, setBlackMode] = useState('human');
+  const [isThinking, setIsThinking] = useState(false);
+
   const sideToMoveLabel = isWhiteTurn ? 'White' : 'Black';
 
-  // --- Move highlighting ---
-  const computeLegalMoves = (fromX, fromY) => {
-    const res = [];
-    for (let ty = 0; ty < 8; ty++) {
-      for (let tx = 0; tx < 8; tx++) {
-        const from = { x: fromX, y: fromY };
-        const to = { x: tx, y: ty };
-        if (isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
-          const targetPiece = getPiece(pieces, tx, ty);
-          const capture = !!targetPiece || willBeEnPassant(from, to);
-          res.push({ x: tx, y: ty, capture });
-        }
-      }
-    }
-    return res;
-  };
-  const legalForSquare = (x, y) => legalMoves.find(m => m.x === x && m.y === y);
-  const clearSelection = () => { setSelectedSquare(null); setLegalMoves([]); };
-
-  const playSound = (audioFile) => { new Audio(audioFile).play(); };
-
+  // --- SAN helpers (kept local for AI too) ---
   const willBeEnPassant = (from, to) => {
     const mover = getPiece(pieces, from.x, from.y);
     if (!mover || mover.type !== 'pawn' || !enPassantTarget) return false;
@@ -91,11 +78,7 @@ export default function ChessBoard() {
       enPassantTarget.x === to.x && enPassantTarget.y === to.y;
   };
 
-  // --- SAN/PGN generation ---
-  const pieceLetter = { pawn: '', knight: 'N', bishop: 'B', rook: 'R', queen: 'Q', king: 'K' };
-
   function otherSameTypeCanAlsoGo(prevPieces, color, type, from, to) {
-    // Check if another same-type piece (same color) can legally go to `to`
     for (let x = 0; x < 8; x++) {
       for (let y = 0; y < 8; y++) {
         if (x === from.x && y === from.y) continue;
@@ -113,21 +96,18 @@ export default function ChessBoard() {
     return mover.type === 'king' && from.x === to.x && Math.abs(to.y - from.y) === 2;
   }
 
-  function genSAN(prevPieces, afterPieces, from, to, moverBefore, promotionType, newEnPassantTarget) {
-    const moving = moverBefore; // piece before move
+  function genSAN(prevPieces, afterPieces, from, to, moverBefore, promotionType, nextEP) {
+    const moving = moverBefore;
     const color = moving.color;
-    const enemy = color === 'white' ? 'black' : 'white';
+    const opp = enemy(color);
     const destBefore = getPiece(prevPieces, to.x, to.y);
-    const enPassant = (moving.type === 'pawn' && !destBefore && willBeEnPassant(from, to));
-    const wasCapture = !!destBefore || enPassant;
+    const enPassantCap = (moving.type === 'pawn' && !destBefore && willBeEnPassant(from, to));
+    const wasCapture = !!destBefore || enPassantCap;
 
-    // Castling first
     if (isCastle(from, to, moving)) {
       let san = (to.y > from.y) ? 'O-O' : 'O-O-O';
-      // check/mate suffix
-      const opponentToMove = enemy;
-      const inCheck = isKingInCheck(afterPieces, opponentToMove);
-      const anyMoves = hasAnyLegalMove(afterPieces, opponentToMove, newEnPassantTarget);
+      const inCheck = isKingInCheck(afterPieces, opp);
+      const anyMoves = hasAnyLegalMove(afterPieces, opp, nextEP);
       if (inCheck) san += anyMoves ? '+' : '#';
       return san;
     }
@@ -139,123 +119,112 @@ export default function ChessBoard() {
       if (promotionType) san += '=' + pieceLetter[promotionType];
     } else {
       san += pieceLetter[moving.type];
-
-      // Disambiguation if needed
       const conflict = otherSameTypeCanAlsoGo(prevPieces, color, moving.type, from, to);
       if (conflict) {
         const needFile = conflict.y !== from.y;
         const needRank = conflict.x !== from.x;
         if (needFile) san += fileOf(from.y);
         if (!needFile && needRank) san += rankOf(from.x);
-        if (needFile && needRank) san += rankOf(from.x); // full if both differ
+        if (needFile && needRank) san += rankOf(from.x);
       }
-
       if (wasCapture) san += 'x';
       san += sq(to.x, to.y);
     }
 
-    // Check / Checkmate markers
-    const opponentToMove = enemy;
-    const inCheck = isKingInCheck(afterPieces, opponentToMove);
-    const anyMoves = hasAnyLegalMove(afterPieces, opponentToMove, newEnPassantTarget);
+    const inCheck = isKingInCheck(afterPieces, opp);
+    const anyMoves = hasAnyLegalMove(afterPieces, opp, nextEP);
     if (inCheck) san += anyMoves ? '+' : '#';
-
     return san;
   }
 
-  const pgnText = useMemo(() => {
-    // Build "1. e4 e5 2. Nf3 Nc6 ..." from flat SAN array
-    const parts = [];
-    for (let i = 0; i < movesSAN.length; i += 2) {
-      const moveNo = (i / 2) + 1;
-      const whiteMove = movesSAN[i] ?? '';
-      const blackMove = movesSAN[i + 1] ?? '';
-      if (blackMove) {
-        parts.push(`${moveNo}. ${whiteMove} ${blackMove}`);
-      } else {
-        parts.push(`${moveNo}. ${whiteMove}`);
+  // --- UI helpers ---
+  const computeLegalMoves = (fromX, fromY) => {
+    const res = [];
+    for (let ty = 0; ty < 8; ty++) {
+      for (let tx = 0; tx < 8; tx++) {
+        const from = { x: fromX, y: fromY };
+        const to = { x: tx, y: ty };
+        if (isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
+          const targetPiece = getPiece(pieces, tx, ty);
+          const capture = !!targetPiece || willBeEnPassant(from, to);
+          res.push({ x: tx, y: ty, capture });
+        }
       }
     }
-    return parts.join(' ');
-  }, [movesSAN]);
-
-  /** Evaluate state and (optionally) alert on mate/stalemate */
-  const evaluatePostMoveState = (newPieces, nextTurnIsWhite, nextEnPassant) => {
-    const sideToMove = nextTurnIsWhite ? 'white' : 'black';
-    const inCheck = isKingInCheck(newPieces, sideToMove);
-    const anyMoves = hasAnyLegalMove(newPieces, sideToMove, nextEnPassant);
-
-    if (inCheck) playSound(check);
-    if (!anyMoves && inCheck) {
-      alert(`${sideToMove} is checkmated!`);
-    } else if (!anyMoves && !inCheck) {
-      alert('Stalemate!');
-    }
+    return res;
   };
 
-  // --- Promotion helpers (now includes SAN after choice) ---
-  const maybeStartPromotion = (beforePieces, from, to, nextTurnIsWhite, prevEnPassant) => {
-    const movedAfter = getPiece(beforePieces, to.x, to.y);
-    if (!movedAfter || movedAfter.type !== 'pawn') return false;
-    const promoteRow = movedAfter.color === 'white' ? 0 : 7;
-    if (to.x !== promoteRow) return false;
+  const legalForSquare = (x, y) => legalMoves.find(m => m.x === x && m.y === y);
+  const clearSelection = () => { setSelectedSquare(null); setLegalMoves([]); };
+  const playSound = (audioFile) => { new Audio(audioFile).play(); };
 
-    setPromotionPending({ from, to, color: movedAfter.color, nextTurnIsWhite, prevPieces: beforePieces, prevEnPassant });
+  const evaluatePostMoveState = (newPieces, nextTurnIsWhite, nextEP) => {
+    const side = nextTurnIsWhite ? 'white' : 'black';
+    const inCheck = isKingInCheck(newPieces, side);
+    const anyMoves = hasAnyLegalMove(newPieces, side, nextEP);
+    if (inCheck) playSound(check);
+    if (!anyMoves && inCheck) { alert(`${side} is checkmated!`); }
+    else if (!anyMoves && !inCheck) { alert('Stalemate!'); }
+  };
+
+  // --- Promotion (human only; AI auto-queens) ---
+  const maybeStartPromotion = (beforePieces, from, to, nextTurnIsWhite) => {
+    const moved = getPiece(beforePieces, to.x, to.y);
+    if (!moved || moved.type !== 'pawn') return false;
+    const promoteRow = moved.color === 'white' ? 0 : 7;
+    if (to.x !== promoteRow) return false;
+    setPromotionPending({ from, to, color: moved.color, nextTurnIsWhite });
     setFrozenForPromotion(true);
     return true;
   };
 
   const finishPromotion = (choiceType) => {
     if (!promotionPending) return;
-    const { from, to, color, nextTurnIsWhite, prevPieces } = promotionPending;
-
-    // Replace the pawn with chosen piece
+    const { from, to, color, nextTurnIsWhite } = promotionPending;
     const k = `${to.x}-${to.y}`;
     const updated = {
       ...pieces,
       [k]: { color, type: choiceType, hasMoved: true }
     };
-
-    // Generate SAN for the promotion move
-    const moverBefore = getPiece(prevPieces, from.x, from.y);
-    const newEnPassantTarget = null; // promotion cannot follow a double push; already handled earlier
-    const san = genSAN(prevPieces, updated, from, to, moverBefore, choiceType, newEnPassantTarget);
+    // SAN
+    const moverBefore = getPiece(pieces, from.x, from.y); // was the pawn before replacement
+    const san = genSAN(pieces, updated, from, to, moverBefore, choiceType, enPassantTarget);
     setMovesSAN((arr) => [...arr, san]);
 
     setPieces(updated);
     setPromotionPending(null);
     setFrozenForPromotion(false);
     setIsWhiteTurn(nextTurnIsWhite);
-    evaluatePostMoveState(updated, nextTurnIsWhite, newEnPassantTarget);
+    evaluatePostMoveState(updated, nextTurnIsWhite, enPassantTarget);
   };
 
-  // --- Input handlers ---
+  // --- Human input handlers ---
   const handleSquareClick = (x, y) => {
-    if (frozenForPromotion) return;
+    if (frozenForPromotion || isThinking) return;
     const piece = getPiece(pieces, x, y);
+
+    // Block clicks if it's an AI side
+    const humanTurn = (isWhiteTurn && whiteMode === 'human') || (!isWhiteTurn && blackMode === 'human');
+    if (!humanTurn) return;
 
     if (selectedSquare) {
       const from = { x: selectedSquare.x, y: selectedSquare.y };
       const to = { x, y };
 
       if (isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
-        const prevPieces = pieces;
-        const moverBefore = getPiece(prevPieces, from.x, from.y);
-        const { pieces: basePieces, nextEnPassant } = makeMove(prevPieces, from, to, null, enPassantTarget);
+        const prev = pieces;
+        const moverBefore = getPiece(prev, from.x, from.y);
+        const { pieces: basePieces, nextEnPassant } = makeMove(prev, from, to, null, enPassantTarget);
         playSound(move_sound);
         clearSelection();
-
-        // Promotion path pauses SAN until user chooses piece
-        const nextTurnIsWhite = !isWhiteTurn;
         setPieces(basePieces);
+
+        const nextTurnIsWhite = !isWhiteTurn;
         setEnPassantTarget(nextEnPassant);
 
-        if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite, enPassantTarget)) {
-          return;
-        }
+        if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) return;
 
-        // Normal move SAN (no promotion)
-        const san = genSAN(prevPieces, basePieces, from, to, moverBefore, null, nextEnPassant);
+        const san = genSAN(prev, basePieces, from, to, moverBefore, null, nextEnPassant);
         setMovesSAN((arr) => [...arr, san]);
 
         setIsWhiteTurn(nextTurnIsWhite);
@@ -281,7 +250,9 @@ export default function ChessBoard() {
   };
 
   const handleOnDrag = (e, x, y) => {
-    if (frozenForPromotion) { e.preventDefault(); return; }
+    if (frozenForPromotion || isThinking) { e.preventDefault(); return; }
+    const humanTurn = (isWhiteTurn && whiteMode === 'human') || (!isWhiteTurn && blackMode === 'human');
+    if (!humanTurn) { e.preventDefault(); return; }
     const piece = getPiece(pieces, x, y);
     if (!piece) { e.preventDefault(); return; }
     if ((isWhiteTurn && piece.color !== 'white') || (!isWhiteTurn && piece.color !== 'black')) {
@@ -295,44 +266,120 @@ export default function ChessBoard() {
   const handleDragOver = (e) => e.preventDefault();
 
   const handleOnDrop = (e, x, y) => {
-    if (frozenForPromotion) return;
+    if (frozenForPromotion || isThinking) return;
+    const humanTurn = (isWhiteTurn && whiteMode === 'human') || (!isWhiteTurn && blackMode === 'human');
+    if (!humanTurn) return;
+
     const data = e.dataTransfer.getData('position');
     if (!data) return;
     const [oldX, oldY] = data.split('-').map(Number);
     const from = { x: oldX, y: oldY };
     const to = { x, y };
 
-    if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
-      playSound(check);
-      return;
-    }
+    if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) { playSound(check); return; }
 
-    const prevPieces = pieces;
-    const moverBefore = getPiece(prevPieces, from.x, from.y);
-    const { pieces: basePieces, nextEnPassant } = makeMove(prevPieces, from, to, null, enPassantTarget);
+    const prev = pieces;
+    const moverBefore = getPiece(prev, from.x, from.y);
+    const { pieces: basePieces, nextEnPassant } = makeMove(prev, from, to, null, enPassantTarget);
     playSound(move_sound);
     clearSelection();
-
-    const nextTurnIsWhite = !isWhiteTurn;
     setPieces(basePieces);
     setEnPassantTarget(nextEnPassant);
 
-    if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite, enPassantTarget)) {
-      return;
-    }
+    const nextTurnIsWhite = !isWhiteTurn;
 
-    const san = genSAN(prevPieces, basePieces, from, to, moverBefore, null, nextEnPassant);
+    if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) return;
+
+    const san = genSAN(prev, basePieces, from, to, moverBefore, null, nextEnPassant);
     setMovesSAN((arr) => [...arr, san]);
 
     setIsWhiteTurn(nextTurnIsWhite);
     evaluatePostMoveState(basePieces, nextTurnIsWhite, nextEnPassant);
   };
 
+  // --- AI LOOP ---
+  async function thinkAndMoveAI() {
+    const color = isWhiteTurn ? 'white' : 'black';
+    const mode = isWhiteTurn ? whiteMode : blackMode;
+
+    // Stop if game is over
+    const term = !hasAnyLegalMove(pieces, color, enPassantTarget);
+    if (term) return;
+
+    setIsThinking(true);
+
+    let aiMove = null;
+    if (mode === 'random') {
+      aiMove = await pickRandomMove(pieces, color, enPassantTarget);
+    } else if (mode === 'mcts') {
+      aiMove = await pickMCTSMove(pieces, color, enPassantTarget, { timeMs: 1200, maxIterations: 3000, rolloutDepth: 40 });
+    }
+
+    setIsThinking(false);
+    if (!aiMove) return;
+
+    const prev = pieces;
+    const moverBefore = getPiece(prev, aiMove.from.x, aiMove.from.y);
+    // Ensure promotion default
+    if (aiMove.needsPromotion && !aiMove.promotionType) aiMove.promotionType = 'queen';
+    const { pieces: basePieces, nextEnPassant } = makeMove(prev, aiMove.from, aiMove.to, aiMove.promotionType, enPassantTarget);
+    playSound(move_sound);
+    setPieces(basePieces);
+    setEnPassantTarget(nextEnPassant);
+
+    const san = genSAN(prev, basePieces, aiMove.from, aiMove.to, moverBefore, aiMove.promotionType ?? null, nextEnPassant);
+    setMovesSAN((arr) => [...arr, san]);
+
+    const nextTurnIsWhite = !isWhiteTurn;
+    setIsWhiteTurn(nextTurnIsWhite);
+    evaluatePostMoveState(basePieces, nextTurnIsWhite, nextEnPassant);
+  }
+
+  // Trigger AI after any state change that gives turn to an AI side
+  useEffect(() => {
+    const mode = isWhiteTurn ? whiteMode : blackMode;
+    if (mode === 'human') return;
+    // tiny delay to let UI update
+    const id = setTimeout(() => { thinkAndMoveAI(); }, 50);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isWhiteTurn, whiteMode, blackMode]);
+
   // --- Render ---
+  const pgnText = useMemo(() => {
+    const parts = [];
+    for (let i = 0; i < movesSAN.length; i += 2) {
+      const moveNo = (i / 2) + 1;
+      const w = movesSAN[i] ?? '';
+      const b = movesSAN[i + 1] ?? '';
+      parts.push(b ? `${moveNo}. ${w} ${b}` : `${moveNo}. ${w}`);
+    }
+    return parts.join(' ');
+  }, [movesSAN]);
+
   return (
     <div className="chess-layout">
       <div className="chess-sidepanel">
-        <div className="turn-indicator"><b>Turn:</b> {sideToMoveLabel}</div>
+        <div className="turn-indicator"><b>Turn:</b> {sideToMoveLabel} {isThinking ? ' (AI is thinking...)' : ''}</div>
+
+        <div className="mode-row">
+          <div><b>White:</b></div>
+          <select value={whiteMode} onChange={(e) => setWhiteMode(e.target.value)}>
+            <option value="human">Human</option>
+            <option value="random">Random</option>
+            <option value="mcts">MCTS</option>
+          </select>
+        </div>
+
+        <div className="mode-row">
+          <div><b>Black:</b></div>
+          <select value={blackMode} onChange={(e) => setBlackMode(e.target.value)}>
+            <option value="human">Human</option>
+            <option value="random">Random</option>
+            <option value="mcts">MCTS</option>
+          </select>
+        </div>
+
         <div className="pgn-title">PGN</div>
         <div className="pgn-box">{pgnText || '—'}</div>
       </div>
@@ -369,7 +416,7 @@ export default function ChessBoard() {
                     ((x + y) % 2 === 1) ? 'chessboard-square--black' : 'chessboard-square--white',
                     selected ? 'chessboard-square--selected' : '',
                     lm ? (isCapture ? 'chessboard-square--legal-capture' : 'chessboard-square--legal-move') : '',
-                    frozenForPromotion ? 'chessboard-square--disabled' : '',
+                    (frozenForPromotion || isThinking) ? 'chessboard-square--disabled' : '',
                   ].join(' ')}
                   onClick={() => handleSquareClick(x, y)}
                   onDrop={(e) => handleOnDrop(e, x, y)}
@@ -379,8 +426,9 @@ export default function ChessBoard() {
                     className="chesspiece-wrapper"
                     draggable={
                       !!piece &&
-                      !frozenForPromotion &&
-                      ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black'))
+                      !(frozenForPromotion || isThinking) &&
+                      ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black')) &&
+                      ((isWhiteTurn && whiteMode === 'human') || (!isWhiteTurn && blackMode === 'human'))
                     }
                     onDragStart={(e) => handleOnDrag(e, x, y)}
                   >
