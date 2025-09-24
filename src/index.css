@@ -101,3 +101,46 @@ body {
   background-color: #0070f3;
   color: #fff;
 }
+
+.promotion-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.promotion-card {
+  background: #fff;
+  padding: 16px 20px;
+  border-radius: 12px;
+  min-width: 260px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.2);
+}
+
+.promotion-title {
+  font-weight: 700;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.promotion-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.promotion-choices > button {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #ddd;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.chessboard-square--disabled {
+  pointer-events: none;
+  opacity: 0.85;
+}
