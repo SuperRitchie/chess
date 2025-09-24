@@ -68,28 +68,61 @@ const ChessBoard = () => {
     setLegalMoves([]);
   };
 
+  const playSound = (audioFile) => {
+    const audio = new Audio(audioFile);
+    audio.play();
+  };
+
+  // Helper to see if a square is a legal target (and if it's a capture)
+  const legalForSquare = (x, y) => legalMoves.find(m => m.x === x && m.y === y);
+
+  // CLICK-TO-MOVE logic is here
   const handleSquareClick = (x, y) => {
     const piece = getPiece(pieces, x, y);
 
-    // Clicking the selected square toggles off
-    if (selectedSquare && selectedSquare.x === x && selectedSquare.y === y) {
-      clearSelection();
+    // If we already have a selection, try to move there if it's legal
+    if (selectedSquare) {
+      const from = { x: selectedSquare.x, y: selectedSquare.y };
+      const to = { x, y };
+
+      if (isLegalMove(pieces, from, to, isWhiteTurn)) {
+        const newPieces = makeMove(pieces, from, to);
+        setPieces(newPieces);
+        setIsWhiteTurn((t) => !t);
+        playSound(move_sound);
+        clearSelection();
+        return;
+      }
+
+      // Clicking the same square toggles off
+      if (selectedSquare.x === x && selectedSquare.y === y) {
+        clearSelection();
+        return;
+      }
+
+      // Not a legal target: if it's your own piece, reselect and show its moves; otherwise just clear
+      if (piece && ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black'))) {
+        setSelectedSquare({ x, y });
+        setLegalMoves(computeLegalMoves(x, y));
+      } else {
+        // little feedback for illegal click
+        playSound(check);
+        clearSelection();
+      }
       return;
     }
 
-    // If you click a piece of the side to move: select and show moves
+    // No selection yet: select if it's your piece
     if (piece && ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black'))) {
       setSelectedSquare({ x, y });
       setLegalMoves(computeLegalMoves(x, y));
       return;
     }
 
-    // Otherwise (empty square or opponent piece) just update selection if a move isn't being executed by click.
-    // (Drag/drop still handles the actual move.)
-    setSelectedSquare(null);
-    setLegalMoves([]);
+    // Clicked empty/opponent square without a selection: nothing to do
   };
 
+  // Drag support
   const handleOnDrag = (e, x, y) => {
     const piece = getPiece(pieces, x, y);
     if (!piece) { e.preventDefault(); return; }
@@ -97,10 +130,8 @@ const ChessBoard = () => {
       e.preventDefault();
       return;
     }
-    // show moves on drag start too (nice UX)
     setSelectedSquare({ x, y });
     setLegalMoves(computeLegalMoves(x, y));
-
     e.dataTransfer.setData('position', `${x}-${y}`);
   };
 
@@ -114,7 +145,7 @@ const ChessBoard = () => {
     const to = { x, y };
 
     if (!isLegalMove(pieces, from, to, isWhiteTurn)) {
-      playSound(check); // error sound for illegal attempt
+      playSound(check);
       return;
     }
 
@@ -124,14 +155,6 @@ const ChessBoard = () => {
     playSound(move_sound);
     clearSelection();
   };
-
-  const playSound = (audioFile) => {
-    const audio = new Audio(audioFile);
-    audio.play();
-  };
-
-  // Helper to see if a square is a legal target (and if it's a capture)
-  const legalForSquare = (x, y) => legalMoves.find(m => m.x === x && m.y === y);
 
   return (
     <div className="chessboard">
@@ -148,7 +171,7 @@ const ChessBoard = () => {
                 key={`${x}-${y}`}
                 className={[
                   'chessboard-square',
-                  isBlackSquare(x, y) ? 'chessboard-square--black' : 'chessboard-square--white',
+                  ((x + y) % 2 === 1) ? 'chessboard-square--black' : 'chessboard-square--white',
                   selected ? 'chessboard-square--selected' : '',
                   lm ? (isCapture ? 'chessboard-square--legal-capture' : 'chessboard-square--legal-move') : ''
                 ].join(' ')}
