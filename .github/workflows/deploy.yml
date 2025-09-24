@@ -5,10 +5,12 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+permissions:
+  contents: write   # allow pushing to gh-pages
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -20,7 +22,16 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
+
+      # NEW: set an author identity for gh-pages' git push
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # gh-pages uses this for auth
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}      # some tools read GH_TOKEN
         run: npm run deploy
