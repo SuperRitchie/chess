@@ -30,10 +30,10 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Deploy (gh-pages with token)
+      - name: Deploy (use npm script)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx gh-pages -d build \
-            -u "github-actions[bot] <github-actions[bot]@users.noreply.github.com>" \
+          npm run deploy -- \
+            -u "github-actions <actions@github.com>" \
             -r "https://x-access-token:${GITHUB_TOKEN}@github.com/SuperRitchie/chess.git"
