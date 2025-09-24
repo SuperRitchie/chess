@@ -6,17 +6,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # allow pushing to gh-pages
+  contents: write   # required to push to gh-pages
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - name: Set up Node
-        uses: actions/setup-node@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 20
           cache: npm
@@ -24,14 +22,18 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # NEW: set an author identity for gh-pages' git push
       - name: Configure git identity
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Deploy
+      - name: Build
+        run: npm run build
+
+      - name: Deploy (gh-pages with token)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # gh-pages uses this for auth
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}      # some tools read GH_TOKEN
-        run: npm run deploy
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx gh-pages -d build \
+            -u "github-actions[bot] <github-actions[bot]@users.noreply.github.com>" \
+            -r "https://x-access-token:${GITHUB_TOKEN}@github.com/SuperRitchie/chess.git"
