@@ -12,8 +12,9 @@ const ChessBoard = () => {
   const [selectedSquare, setSelectedSquare] = useState(null);
   const [isWhiteTurn, setIsWhiteTurn] = useState(true);
   const [legalMoves, setLegalMoves] = useState([]); // [{x,y,capture:boolean}]
-  const [promotionPending, setPromotionPending] = useState(null); // {to:{x,y}, color:'white'|'black'}
+  const [promotionPending, setPromotionPending] = useState(null); // {to:{x,y}, color, nextTurnIsWhite}
   const [frozenForPromotion, setFrozenForPromotion] = useState(false);
+  const [enPassantTarget, setEnPassantTarget] = useState(null);   // {x,y} or null
 
   const [pieces, setPieces] = useState({
     '0-0': initPiece('black', 'rook'),
@@ -56,13 +57,25 @@ const ChessBoard = () => {
       for (let tx = 0; tx < 8; tx++) {
         const from = { x: fromX, y: fromY };
         const to = { x: tx, y: ty };
-        if (isLegalMove(pieces, from, to, isWhiteTurn)) {
+        if (isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
           const targetPiece = getPiece(pieces, tx, ty);
-          res.push({ x: tx, y: ty, capture: !!targetPiece });
+          // For en passant, the destination is empty; still show as capture
+          const capture = !!targetPiece || willBeEnPassant(from, to);
+          res.push({ x: tx, y: ty, capture });
         }
       }
     }
     return res;
+  };
+
+  const willBeEnPassant = (from, to) => {
+    const mover = getPiece(pieces, from.x, from.y);
+    if (!mover || mover.type !== 'pawn' || !enPassantTarget) return false;
+    const dx = to.x - from.x, dy = to.y - from.y;
+    const destEmpty = !getPiece(pieces, to.x, to.y);
+    const dir = mover.color === 'white' ? -1 : 1;
+    return destEmpty && dx === dir && Math.abs(dy) === 1 &&
+      enPassantTarget.x === to.x && enPassantTarget.y === to.y;
   };
 
   const clearSelection = () => {
@@ -81,7 +94,7 @@ const ChessBoard = () => {
   const evaluatePostMoveState = (newPieces, nextTurnIsWhite) => {
     const sideToMove = nextTurnIsWhite ? 'white' : 'black';
     const inCheck = isKingInCheck(newPieces, sideToMove);
-    const anyMoves = hasAnyLegalMove(newPieces, sideToMove);
+    const anyMoves = hasAnyLegalMove(newPieces, sideToMove, enPassantTarget /* old one doesn't matter after move */);
 
     if (inCheck) playSound(check);
 
@@ -99,7 +112,6 @@ const ChessBoard = () => {
     const promoteRow = moved.color === 'white' ? 0 : 7;
     if (to.x !== promoteRow) return false;
 
-    // Freeze the board until user picks piece
     setPromotionPending({ to, color: moved.color, nextTurnIsWhite });
     setFrozenForPromotion(true);
     return true;
@@ -122,48 +134,39 @@ const ChessBoard = () => {
     evaluatePostMoveState(updated, nextTurnIsWhite);
   };
 
-  const cancelPromotion = () => {
-    // (Optional) not used: promotion is mandatory; we don't provide cancel.
-    setPromotionPending(null);
-    setFrozenForPromotion(false);
-  };
-
   // CLICK-TO-MOVE logic
   const handleSquareClick = (x, y) => {
-    if (frozenForPromotion) return; // ignore input until promotion is resolved
+    if (frozenForPromotion) return;
     const piece = getPiece(pieces, x, y);
 
     if (selectedSquare) {
       const from = { x: selectedSquare.x, y: selectedSquare.y };
       const to = { x, y };
 
-      if (isLegalMove(pieces, from, to, isWhiteTurn)) {
-        // Make the move with no promotion type first
-        const basePieces = makeMove(pieces, from, to);
+      if (isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
+        const { pieces: basePieces, nextEnPassant } = makeMove(pieces, from, to, null, enPassantTarget);
         playSound(move_sound);
         clearSelection();
 
-        // Check if this triggers promotion; if yes, pause turn switch & show UI
         const nextTurnIsWhite = !isWhiteTurn;
+        setPieces(basePieces);
+        setEnPassantTarget(nextEnPassant);
+
         if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) {
-          setPieces(basePieces);
+          // Pause turn switch until promotion selection
           return;
         }
 
-        // Normal flow (no promotion)
-        setPieces(basePieces);
         setIsWhiteTurn(nextTurnIsWhite);
         evaluatePostMoveState(basePieces, nextTurnIsWhite);
         return;
       }
 
-      // Clicking same square unselects
       if (selectedSquare.x === x && selectedSquare.y === y) {
         clearSelection();
         return;
       }
 
-      // Switch selection if clicking own piece
       if (piece && ((isWhiteTurn && piece.color === 'white') || (!isWhiteTurn && piece.color === 'black'))) {
         setSelectedSquare({ x, y });
         setLegalMoves(computeLegalMoves(x, y));
@@ -204,22 +207,23 @@ const ChessBoard = () => {
     const from = { x: oldX, y: oldY };
     const to = { x, y };
 
-    if (!isLegalMove(pieces, from, to, isWhiteTurn)) {
+    if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) {
       playSound(check);
       return;
     }
 
-    const basePieces = makeMove(pieces, from, to);
+    const { pieces: basePieces, nextEnPassant } = makeMove(pieces, from, to, null, enPassantTarget);
     playSound(move_sound);
     clearSelection();
 
     const nextTurnIsWhite = !isWhiteTurn;
+    setPieces(basePieces);
+    setEnPassantTarget(nextEnPassant);
+
     if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) {
-      setPieces(basePieces);
       return;
     }
 
-    setPieces(basePieces);
     setIsWhiteTurn(nextTurnIsWhite);
     evaluatePostMoveState(basePieces, nextTurnIsWhite);
   };
