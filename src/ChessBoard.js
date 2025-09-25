@@ -168,34 +168,42 @@ export default function ChessBoard() {
   };
 
   // --- Promotion (human only; AI auto-queens) ---
-  const maybeStartPromotion = (beforePieces, from, to, nextTurnIsWhite) => {
-    const moved = getPiece(beforePieces, to.x, to.y);
+  const maybeStartPromotion = (afterPieces, from, to, nextTurnIsWhite, prevPieces, prevEnPassant) => {
+    const moved = getPiece(afterPieces, to.x, to.y);
     if (!moved || moved.type !== 'pawn') return false;
     const promoteRow = moved.color === 'white' ? 0 : 7;
     if (to.x !== promoteRow) return false;
-    setPromotionPending({ from, to, color: moved.color, nextTurnIsWhite });
+
+    setPromotionPending({
+      from, to,
+      color: moved.color,
+      nextTurnIsWhite,
+      prevPieces,         // more parameters
+      prevEnPassant       // (for SAN disambiguation)
+    });
     setFrozenForPromotion(true);
     return true;
   };
 
+
   const finishPromotion = (choiceType) => {
     if (!promotionPending) return;
-    const { from, to, color, nextTurnIsWhite } = promotionPending;
-    const k = `${to.x}-${to.y}`;
-    const updated = {
-      ...pieces,
-      [k]: { color, type: choiceType, hasMoved: true }
-    };
-    // SAN
-    const moverBefore = getPiece(pieces, from.x, from.y); // was the pawn before replacement
-    const san = genSAN(pieces, updated, from, to, moverBefore, choiceType, enPassantTarget);
-    setMovesSAN((arr) => [...arr, san]);
+    const { from, to, color, nextTurnIsWhite, prevPieces, prevEnPassant } = promotionPending;
 
+    // Replace pawn on the current (post-move) board:
+    const k = `${to.x}-${to.y}`;
+    const updated = { ...pieces, [k]: { color, type: choiceType, hasMoved: true } };
+
+    // Use PRE-move board to identify the moving pawn for SAN/disambiguation:
+    const moverBefore = getPiece(prevPieces, from.x, from.y);
+    const san = genSAN(prevPieces, updated, from, to, moverBefore, choiceType, /*nextEP*/ null);
+
+    setMovesSAN((arr) => [...arr, san]);
     setPieces(updated);
     setPromotionPending(null);
     setFrozenForPromotion(false);
     setIsWhiteTurn(nextTurnIsWhite);
-    evaluatePostMoveState(updated, nextTurnIsWhite, enPassantTarget);
+    evaluatePostMoveState(updated, nextTurnIsWhite, /*nextEP*/ null);
   };
 
   // --- Human input handlers ---
@@ -222,7 +230,7 @@ export default function ChessBoard() {
         const nextTurnIsWhite = !isWhiteTurn;
         setEnPassantTarget(nextEnPassant);
 
-        if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) return;
+        if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite, prev, enPassantTarget)) return;
 
         const san = genSAN(prev, basePieces, from, to, moverBefore, null, nextEnPassant);
         setMovesSAN((arr) => [...arr, san]);
@@ -288,7 +296,7 @@ export default function ChessBoard() {
 
     const nextTurnIsWhite = !isWhiteTurn;
 
-    if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite)) return;
+    if (maybeStartPromotion(basePieces, from, to, nextTurnIsWhite, prev, enPassantTarget)) return;
 
     const san = genSAN(prev, basePieces, from, to, moverBefore, null, nextEnPassant);
     setMovesSAN((arr) => [...arr, san]);
