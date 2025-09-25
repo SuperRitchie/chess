@@ -163,7 +163,7 @@ export default function ChessBoard() {
     const inCheck = isKingInCheck(newPieces, side);
     const anyMoves = hasAnyLegalMove(newPieces, side, nextEP);
     if (inCheck) playSound(check);
-    if (!anyMoves && inCheck) { alert(`${side} is checkmated!`); }
+    if (!anyMoves && inCheck) { alert(`${side} is checkmated! Good job Rebecca! :)`); }
     else if (!anyMoves && !inCheck) { alert('Stalemate!'); }
   };
 
