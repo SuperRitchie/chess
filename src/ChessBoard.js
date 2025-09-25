@@ -188,7 +188,7 @@ export default function ChessBoard() {
 
   const finishPromotion = (choiceType) => {
     if (!promotionPending) return;
-    const { from, to, color, nextTurnIsWhite, prevPieces, prevEnPassant } = promotionPending;
+    const { from, to, color, nextTurnIsWhite, prevPieces } = promotionPending;
 
     // Replace pawn on the current (post-move) board:
     const k = `${to.x}-${to.y}`;
