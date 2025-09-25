@@ -165,6 +165,12 @@ export default function ChessBoard() {
     if (inCheck) playSound(check);
     if (!anyMoves && inCheck) { alert(`${side} is checkmated!`); }
     else if (!anyMoves && !inCheck) { alert('Stalemate!'); }
+
+    // if white wins, alert('White wins by checkmate!');
+    if (!anyMoves && inCheck && !nextTurnIsWhite) {
+      alert('Good job Rebecca!! You won as white!! Thanks for playing and testing!! :)');
+    }
+
   };
 
   // --- Promotion (human only; AI auto-queens) ---
