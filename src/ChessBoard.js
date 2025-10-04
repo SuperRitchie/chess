@@ -7,6 +7,7 @@ import check from './assets/check.mp3';
 import { isLegalMove, makeMove, getPiece, isKingInCheck, hasAnyLegalMove } from './chessRules';
 import { pickRandomMove } from './randomAI';
 import { pickMCTSMove } from './mctsAI';
+import { pickNNMove } from './nnAI';
 
 const initPiece = (color, type) => ({ color, type, hasMoved: false });
 
@@ -321,6 +322,8 @@ export default function ChessBoard() {
       aiMove = await pickRandomMove(pieces, color, enPassantTarget);
     } else if (mode === 'mcts') {
       aiMove = await pickMCTSMove(pieces, color, enPassantTarget, { timeMs: 1200, maxIterations: 3000, rolloutDepth: 40 });
+    } else if (mode === 'nn') {
+      aiMove = await pickNNMove(pieces, color, enPassantTarget);
     }
 
     setIsThinking(false);
@@ -376,6 +379,7 @@ export default function ChessBoard() {
             <option value="human">Human</option>
             <option value="random">Random</option>
             <option value="mcts">MCTS</option>
+            <option value="nn">NN</option>
           </select>
         </div>
 
@@ -385,6 +389,7 @@ export default function ChessBoard() {
             <option value="human">Human</option>
             <option value="random">Random</option>
             <option value="mcts">MCTS</option>
+            <option value="nn">NN</option>
           </select>
         </div>
 

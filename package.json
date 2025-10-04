@@ -4,6 +4,7 @@
   "private": true,
   "homepage": "http://SuperRitchie.github.io/chess",
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
     "@testing-library/jest-dom": "^6.0.0",
     "@testing-library/react": "^16.0.0",
     "@testing-library/user-event": "^14.0.0",
