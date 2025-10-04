@@ -1,7 +1,6 @@
 // src/ai/nnAI.js
 import * as tf from "@tensorflow/tfjs";
 import { listLegalMoves, makeMove, getPiece } from "./chessRules";
-import { boardToFEN } from "./utils/fen";
 
 /**
  * Loads model once (singleton).
@@ -75,7 +74,7 @@ export async function pickNNMove(pieces, color, enPassantTarget) {
 
   for (const m of moves) {
     const promo = m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
-    const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
+    const { pieces: after } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
     const score = await evalPosition(model, after, !isWhite); // next to move is opponent
     // White likes large +, Black likes large - (mirror by multiplying)
     const signed = isWhite ? score : -score;
