@@ -9,7 +9,7 @@ OUT_PGN = pathlib.Path("ml/data/games.pgn")
 OUT_PGN.parent.mkdir(parents=True, exist_ok=True)
 
 # Example: public Lichess export for a pool of strong users
-USERS = ["MagnusCarlsen", "Hikaru", "Firouzja2003", "DanielNaroditsky", "GothamChess"]
+USERS = ["drnykterstein", "tsmftxh", "alireza2003", "rebeccaharris", "crew64"]
 # Rapid + blitz only
 PARAMS = {"max": 1000, "perfType": "blitz,rapid", "analysed": "false"}
 
