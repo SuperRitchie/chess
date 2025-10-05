@@ -3,7 +3,7 @@ python-chess==1.999   # for PGN parsing, FEN, board utils
 requests==2.32.5      # for downloading PGNs from Lichess
 
 # Training / ML
-tensorflow==2.16.1    # CPU build of TensorFlow
+tensorflow==2.20.0    # CPU build of TensorFlow
 tensorflowjs==4.20.0  # export trained model to TFJS
 
 # Utilities
