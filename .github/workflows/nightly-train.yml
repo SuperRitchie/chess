@@ -2,6 +2,7 @@ name: Nightly NN training
 
 on:
     push:
+      branches: [ master ]
     schedule:
         - cron: "17 9 * * *"   # 09:17 UTC daily (~02:17 PDT / 01:17 PST)
     workflow_dispatch: {}

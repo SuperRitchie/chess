@@ -1,7 +1,7 @@
 # ml/stockfish_eval.py
 """
 Evaluate FENs with Stockfish (centipawns). Requires a local Stockfish binary.
-Set STOCKFISH_PATH env var in GitHub Actions (we'll install) or locally.
+Set STOCKFISH_PATH env var in GitHub Actions or locally.
 Depth is tuned for speed vs quality.
 """
 import os, pathlib, subprocess, json, shlex
