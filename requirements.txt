@@ -1,6 +1,6 @@
 # Core libs
 python-chess==1.999   # for PGN parsing, FEN, board utils
-requests==2.32.3      # for downloading PGNs from Lichess
+requests==2.32.5      # for downloading PGNs from Lichess
 
 # Training / ML
 tensorflow==2.16.1    # CPU build of TensorFlow
