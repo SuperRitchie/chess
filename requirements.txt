@@ -1,10 +1,11 @@
-# Core libs
-python-chess==1.999   # for PGN parsing, FEN, board utils
-requests==2.32.5      # for downloading PGNs from Lichess
+# chess + utils
+python-chess==1.999
+requests==2.32.5
 
-# Training / ML
-tensorflow==2.20.0    # CPU build of TensorFlow
-tensorflowjs==4.20.0  # export trained model to TFJS
+# ML stack (aligned so TF-JS + TF-DF work together)
+tensorflow==2.19.0
+tensorflow-decision-forests==1.12.0
+tensorflowjs==4.20.0
 
-# Utilities
+# Numpy compatible with TF 2.19 on Py3.11
 numpy==1.26.4
