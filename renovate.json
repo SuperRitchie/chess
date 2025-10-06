@@ -4,9 +4,24 @@
     "config:base"
   ],
   "ignoreTests": true,
+  "ignoreDeps": [
+    "python",
+    "tensorflow",
+    "tensorflowjs"
+  ],
   "packageRules": [
     {
-      "matchUpdateTypes": ["major", "minor", "patch", "pin", "pinDigest", "digest", "lockFileMaintenance", "rollback", "bump"],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch",
+        "pin",
+        "pinDigest",
+        "digest",
+        "lockFileMaintenance",
+        "rollback",
+        "bump"
+      ],
       "automerge": true
     }
   ]
