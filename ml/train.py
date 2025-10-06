@@ -23,15 +23,17 @@ def load_dataset():
     y = np.array(y, dtype=np.float32)
     return X, y
 
-def build_model(input_dim=8*8*13):
-    inp = tf.keras.Input(shape=(input_dim,), name="x")
-    h = tf.keras.layers.Dense(512, activation="relu")(inp)
-    h = tf.keras.layers.Dense(256, activation="relu")(h)
-    h = tf.keras.layers.Dense(128, activation="relu")(h)
-    out = tf.keras.layers.Dense(1, activation="linear", name="cp")(h)
+def build_model(input_shape=(8,8,13)):
+    inp = tf.keras.Input(shape=input_shape)
+    x = tf.keras.layers.Conv2D(64, kernel_size=3, padding='same', activation='relu')(inp)
+    x = tf.keras.layers.Conv2D(64, kernel_size=3, padding='same', activation='relu')(x)
+    x = tf.keras.layers.Flatten()(x)
+    x = tf.keras.layers.Dense(256, activation='relu')(x)
+    out = tf.keras.layers.Dense(1, activation='linear', name='cp')(x)
     model = tf.keras.Model(inp, out)
-    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss="huber", metrics=["mae"])
+    model.compile(optimizer=tf.keras.optimizers.Adam(1e-3), loss='huber')
     return model
+
 
 def main():
     X, y = load_dataset()

@@ -63,22 +63,43 @@ async function evalPosition(model, pieces, isWhiteTurn) {
  * Pick best move by 1-ply lookahead using the NN eval.
  * If promotion required and not specified, auto-queen.
  */
-export async function pickNNMove(pieces, color, enPassantTarget) {
-  const model = await loadModel();
-  const isWhite = color === "white";
+export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {
   const moves = listLegalMoves(pieces, color, enPassantTarget);
-  if (moves.length === 0) return null;
-
-  let best = null;
+  let bestMove = null;
   let bestScore = -Infinity;
-
   for (const m of moves) {
-    const promo = m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
-    const { pieces: after } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
-    const score = await evalPosition(model, after, !isWhite); // next to move is opponent
-    // White likes large +, Black likes large - (mirror by multiplying)
-    const signed = isWhite ? score : -score;
-    if (signed > bestScore) { bestScore = signed; best = { ...m, promotionType: promo }; }
+    const promo = m.needsPromotion && !m.promotionType ? 'queen' : m.promotionType;
+    const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
+    // depth-1 because we already made one move
+    const score = await minimax(after, depth - 1, false, color === 'white' ? 'black' : 'white', nextEnPassant);
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = { ...m, promotionType: promo };
+    }
+  }
+  return bestMove;
+}
+
+
+async function minimax(pieces, depth, maximizing, color, enPassantTarget) {
+  if (depth === 0) {
+    const model = await loadModel();
+    const isWhiteTurn = (color === 'white');
+    return await evalPosition(model, pieces, isWhiteTurn);
+  }
+  const moves = listLegalMoves(pieces, color, enPassantTarget);
+  if (moves.length === 0) return maximizing ? -Infinity : Infinity;
+
+  let best = maximizing ? -Infinity : Infinity;
+  for (const m of moves) {
+    const promo = m.needsPromotion && !m.promotionType ? 'queen' : m.promotionType;
+    const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
+    const val = await minimax(after, depth - 1, !maximizing, maximizing ? 'black' : 'white', nextEnPassant);
+    if (maximizing) {
+      best = Math.max(best, val);
+    } else {
+      best = Math.min(best, val);
+    }
   }
   return best;
 }
