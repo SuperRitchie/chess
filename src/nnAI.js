@@ -1,119 +1,94 @@
 // src/nnAI.js
-/* global tf */
-
+import * as tf from "@tensorflow/tfjs";
 import { listLegalMoves, makeMove, getPiece } from "./chessRules";
 
 /**
- * Loads model once (singleton).
- * public/nn/model.json is a "layers-model" taking [1, 8, 8, 13].
+ * Load the NN model once (singleton).
  */
 let _modelPromise = null;
 
 async function loadModel() {
   if (!_modelPromise) {
-    const base = process.env.PUBLIC_URL || "";
-    const url = `${base}/nn/model.json`;
+    const url = process.env.PUBLIC_URL + "/nn/model.json";
     console.log("Loading NN model from", url);
     _modelPromise = tf.loadLayersModel(url);
   }
   return _modelPromise;
 }
 
+// Channel indices must match ml/features.py::piece_order
+// piece_order = [W pawn, W knight, W bishop, W rook, W queen, W king,
+//                B pawn, B knight, B bishop, B rook, B queen, B king] + side plane
+const pieceChannels = {
+  white: {
+    pawn: 0,
+    knight: 1,
+    bishop: 2,
+    rook: 3,
+    queen: 4,
+    king: 5,
+  },
+  black: {
+    pawn: 6,
+    knight: 7,
+    bishop: 8,
+    rook: 9,
+    queen: 10,
+    king: 11,
+  },
+};
+
 /**
- * Feature extractor matching ml/features.py
- *  - 12 planes: 6 piece types × 2 colors
- *  - 1 plane: side to move
- * Layout: [1, 8, 8, 13] (channels-last)
+ * Build a tensor of shape [1, 8, 8, 13] matching the Python feature extractor.
  */
 function featuresFromBoard(pieces, isWhiteTurn) {
-  const planes = {
-    white: { pawn: [], knight: [], bishop: [], rook: [], queen: [], king: [] },
-    black: { pawn: [], knight: [], bishop: [], rook: [], queen: [], king: [] },
-  };
+  const data = [];
 
-  // Build 12 planes: each is 64 entries (one per square)
+  // x = row (0..7 top to bottom), y = col (0..7 left to right)
+  // We push per-square 13-dim feature vectors; channel axis is last.
   for (let x = 0; x < 8; x++) {
     for (let y = 0; y < 8; y++) {
+      const cell = new Array(13).fill(0);
       const p = getPiece(pieces, x, y);
 
-      const onehot = {
-        white: { pawn: 0, knight: 0, bishop: 0, rook: 0, queen: 0, king: 0 },
-        black: { pawn: 0, knight: 0, bishop: 0, rook: 0, queen: 0, king: 0 },
-      };
-
       if (p) {
-        onehot[p.color][p.type] = 1;
+        const ch = pieceChannels[p.color][p.type];
+        cell[ch] = 1;
       }
 
-      for (const color of ["white", "black"]) {
-        for (const t of ["pawn", "knight", "bishop", "rook", "queen", "king"]) {
-          planes[color][t].push(onehot[color][t]);
-        }
-      }
+      // side-to-move plane (same for all squares)
+      cell[12] = isWhiteTurn ? 1 : 0;
+
+      // Push channels-last so flatten order matches [8,8,13] in NumPy
+      data.push(...cell);
     }
   }
 
-  // Side-to-move plane: same value on all 64 squares
-  const sideVal = isWhiteTurn ? 1 : 0;
-  const sidePlane = new Array(64).fill(sideVal);
-
-  // Pack into [1, 8, 8, 13] with channel-last layout.
-  // Channel order: all whites, then all blacks, then side.
-  const data = [];
-  for (let x = 0; x < 8; x++) {
-    for (let y = 0; y < 8; y++) {
-      const idx = x * 8 + y;
-      const channels = [
-        planes.white.pawn[idx],
-        planes.white.knight[idx],
-        planes.white.bishop[idx],
-        planes.white.rook[idx],
-        planes.white.queen[idx],
-        planes.white.king[idx],
-        planes.black.pawn[idx],
-        planes.black.knight[idx],
-        planes.black.bishop[idx],
-        planes.black.rook[idx],
-        planes.black.queen[idx],
-        planes.black.king[idx],
-        sidePlane[idx],
-      ];
-      data.push(...channels);
-    }
-  }
-
-  return tf.tensor(data, [1, 8, 8, 13]);
+  // [1, 8, 8, 13]: batch, row, col, channel
+  return tf.tensor4d(data, [1, 8, 8, 13]);
 }
 
 /**
- * Evaluate position: returns centipawns from White's POV.
+ * Score: predicted centipawns from White's perspective.
  */
 async function evalPosition(model, pieces, isWhiteTurn) {
   const x = featuresFromBoard(pieces, isWhiteTurn);
   const y = model.predict(x);
-  const valArray = await y.data();
-  const val = valArray[0];
+  const val = (await y.data())[0];
   tf.dispose([x, y]);
-  return val;
+  return val; // centipawns
 }
 
 /**
- * Top-level API used by ChessBoard.js
- * color: "white" or "black"
+ * Public API: pick best move using NN + minimax.
  */
-export async function pickNNMove(
-  pieces,
-  color,
-  enPassantTarget,
-  depth = 2
-) {
+export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {
   const moves = listLegalMoves(pieces, color, enPassantTarget);
   let bestMove = null;
   let bestScore = -Infinity;
 
   for (const m of moves) {
-    const promo =
-      m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
+    const promo = m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
     const { pieces: after, nextEnPassant } = makeMove(
       pieces,
       m.from,
@@ -147,15 +122,11 @@ async function minimax(pieces, depth, maximizing, color, enPassantTarget) {
   }
 
   const moves = listLegalMoves(pieces, color, enPassantTarget);
-  if (moves.length === 0) {
-    return maximizing ? -Infinity : Infinity;
-  }
+  if (moves.length === 0) return maximizing ? -Infinity : Infinity;
 
   let best = maximizing ? -Infinity : Infinity;
-
   for (const m of moves) {
-    const promo =
-      m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
+    const promo = m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
     const { pieces: after, nextEnPassant } = makeMove(
       pieces,
       m.from,
