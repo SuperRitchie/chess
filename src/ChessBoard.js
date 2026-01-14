@@ -532,172 +532,205 @@ export default function ChessBoard() {
   ];
 
   return (
-    <div className="chess-layout">
-      <div className="chess-sidepanel">
-        <div className="turn-indicator">
-          <b>Turn:</b> {sideToMoveLabel} {isThinking ? " (AI is thinking...)" : ""}
-        </div>
+    <div className="app-shell">
+      {/* LEFT RAIL */}
+      <div className="left-rail">
+        <a
+          className="rail-link rail-link--top"
+          href="http://SuperRitchie.github.io/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Portfolio
+        </a>
 
-        <div className="mode-row">
-          <div>
-            <b>White:</b>
-          </div>
-          <div className="segmented">
-            {modes.map((m) => (
-              <button
-                key={m.key}
-                className={`seg-btn ${whiteMode === m.key ? "is-active" : ""}`}
-                onClick={() => setWhiteMode(m.key)}
-                disabled={isThinking || frozenForPromotion}
-                type="button"
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="mode-row">
-          <div>
-            <b>Black:</b>
-          </div>
-          <div className="segmented">
-            {modes.map((m) => (
-              <button
-                key={m.key}
-                className={`seg-btn ${blackMode === m.key ? "is-active" : ""}`}
-                onClick={() => setBlackMode(m.key)}
-                disabled={isThinking || frozenForPromotion}
-                type="button"
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="pgn-title">PGN</div>
-        <div className="pgn-box">{pgnText || "—"}</div>
+        <a
+          className="rail-link"
+          href="https://github.com/SuperRitchie"
+          target="_blank"
+          rel="noreferrer"
+        >
+          GitHub
+        </a>
       </div>
 
-      <div className="board-area">
-        <div className="board-topbar">
-          <div className="board-actions">
-            <button className="ui-btn" onClick={handleReset} disabled={isThinking || frozenForPromotion} type="button">
-              Reset
-            </button>
-            <button className="ui-btn" onClick={handleUndo} disabled={history.length === 0 || isThinking || frozenForPromotion} type="button">
-              Undo
-            </button>
+      {/* MAIN CHESS LAYOUT */}
+      <div className="chess-layout">
+        <div className="chess-sidepanel">
+          <div className="turn-indicator">
+            <b>Turn:</b> {sideToMoveLabel} {isThinking ? " (AI is thinking...)" : ""}
           </div>
 
-          <div className="board-actions">
-            <button
-              className="ui-btn"
-              onClick={() => setIsFlipped((v) => !v)}
-              disabled={isThinking || frozenForPromotion}
-              type="button"
-            >
-              Flip Board
-            </button>
-          </div>
-        </div>
-
-        {/* Promotion modal */}
-        {promotionPending && (
-          <div className="promotion-modal">
-            <div className="promotion-card">
-              <div className="promotion-title">Choose promotion</div>
-              <div className="promotion-choices">
-                <button onClick={() => finishPromotion("queen")} type="button">
-                  Queen
+          <div className="mode-row">
+            <div>
+              <b>White:</b>
+            </div>
+            <div className="segmented">
+              {modes.map((m) => (
+                <button
+                  key={m.key}
+                  className={`seg-btn ${whiteMode === m.key ? "is-active" : ""}`}
+                  onClick={() => setWhiteMode(m.key)}
+                  disabled={isThinking || frozenForPromotion}
+                  type="button"
+                >
+                  {m.label}
                 </button>
-                <button onClick={() => finishPromotion("rook")} type="button">
-                  Rook
-                </button>
-                <button onClick={() => finishPromotion("bishop")} type="button">
-                  Bishop
-                </button>
-                <button onClick={() => finishPromotion("knight")} type="button">
-                  Knight
-                </button>
-              </div>
+              ))}
             </div>
           </div>
-        )}
 
-        <div className="chessboard-wrap">
-          <div className={`chessboard ${isFlipped ? "is-flipped" : ""}`}>
-            {Array.from({ length: 8 }, (_, y) => (
-              <div key={y} className="chessboard-row">
-                {Array.from({ length: 8 }, (_, x) => {
+          <div className="mode-row">
+            <div>
+              <b>Black:</b>
+            </div>
+            <div className="segmented">
+              {modes.map((m) => (
+                <button
+                  key={m.key}
+                  className={`seg-btn ${blackMode === m.key ? "is-active" : ""}`}
+                  onClick={() => setBlackMode(m.key)}
+                  disabled={isThinking || frozenForPromotion}
+                  type="button"
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-                  // ✅ map VIEW coords -> BOARD coords (mirror files)
-                  const bx = x;
-                  const by = 7 - y;
+          <div className="pgn-title">PGN</div>
+          <div className="pgn-box">{pgnText || "—"}</div>
+        </div>
 
-                  const piece = getPiece(pieces, bx, by);
-                  const selected =
-                    selectedSquare && selectedSquare.x === bx && selectedSquare.y === by;
+        <div className="board-area">
+          <div className="board-topbar">
+            <div className="board-actions">
+              <button
+                className="ui-btn"
+                onClick={handleReset}
+                disabled={isThinking || frozenForPromotion}
+                type="button"
+              >
+                Reset
+              </button>
+              <button
+                className="ui-btn"
+                onClick={handleUndo}
+                disabled={history.length === 0 || isThinking || frozenForPromotion}
+                type="button"
+              >
+                Undo
+              </button>
+            </div>
 
-                  const lm = legalForSquare(bx, by);
-                  const isCapture = lm?.capture;
+            <div className="board-actions">
+              <button
+                className="ui-btn"
+                onClick={() => setIsFlipped((v) => !v)}
+                disabled={isThinking || frozenForPromotion}
+                type="button"
+              >
+                Flip Board
+              </button>
+            </div>
+          </div>
 
-                  // screen-space indices in loops:
-                  // x = col (0..7 left->right)
-                  // y = row (0..7 top->bottom)
-
-                  // Labels based on BOARD coords (so rotation doesn’t swap edges visually)
-                  const isBottomEdge = (bx === 7); // rank 1 side
-                  const isLeftEdge = (by === 0);   // file a side
-
-                  const fileLabel = String.fromCharCode(97 + by); // a..h
-                  const rankLabel = String(8 - bx);               // 8..1
-
-
-
-                  return (
-                    <div
-                      key={`${bx}-${by}`}
-                      className={[
-                        "chessboard-square",
-                        // keep colors based on VIEW coords for user familiarity
-                        (x + y) % 2 === 0 ? "chessboard-square--black" : "chessboard-square--white",
-                        selected ? "chessboard-square--selected" : "",
-                        lm ? (isCapture ? "chessboard-square--legal-capture" : "chessboard-square--legal-move") : "",
-                        frozenForPromotion || isThinking ? "chessboard-square--disabled" : "",
-                      ].join(" ")}
-                      // ✅ call handlers with BOARD coords
-                      onClick={() => handleSquareClick(bx, by)}
-                      onDrop={(e) => handleOnDrop(e, bx, by)}
-                      onDragOver={handleDragOver}
-                    >
-                      {isBottomEdge && <span className="sq-label file">{fileLabel}</span>}
-                      {isLeftEdge && <span className="sq-label rank">{rankLabel}</span>}
-
-
-
-                      <div
-                        className="chesspiece-wrapper"
-                        draggable={
-                          !!piece &&
-                          !(frozenForPromotion || isThinking) &&
-                          ((isWhiteTurn && piece.color === "white") ||
-                            (!isWhiteTurn && piece.color === "black")) &&
-                          ((isWhiteTurn && whiteMode === "human") ||
-                            (!isWhiteTurn && blackMode === "human"))
-                        }
-                        // ✅ drag-start must also use BOARD coords so dataTransfer matches
-                        onDragStart={(e) => handleOnDrag(e, bx, by)}
-                      >
-                        <ChessPiece piece={piece} />
-                      </div>
-                    </div>
-                  );
-                })}
+          {/* Promotion modal */}
+          {promotionPending && (
+            <div className="promotion-modal">
+              <div className="promotion-card">
+                <div className="promotion-title">Choose promotion</div>
+                <div className="promotion-choices">
+                  <button onClick={() => finishPromotion("queen")} type="button">
+                    Queen
+                  </button>
+                  <button onClick={() => finishPromotion("rook")} type="button">
+                    Rook
+                  </button>
+                  <button onClick={() => finishPromotion("bishop")} type="button">
+                    Bishop
+                  </button>
+                  <button onClick={() => finishPromotion("knight")} type="button">
+                    Knight
+                  </button>
+                </div>
               </div>
-            ))}
+            </div>
+          )}
 
+          <div className="chessboard-wrap">
+            <div className={`chessboard ${isFlipped ? "is-flipped" : ""}`}>
+              {Array.from({ length: 8 }, (_, y) => (
+                <div key={y} className="chessboard-row">
+                  {Array.from({ length: 8 }, (_, x) => {
+                    const bx = x;
+                    const by = 7 - y;
+
+                    const piece = getPiece(pieces, bx, by);
+                    const selected =
+                      selectedSquare &&
+                      selectedSquare.x === bx &&
+                      selectedSquare.y === by;
+
+                    const lm = legalForSquare(bx, by);
+                    const isCapture = lm?.capture;
+
+                    const isBottomEdge = bx === 7;
+                    const isLeftEdge = by === 0;
+
+                    const fileLabel = String.fromCharCode(97 + by);
+                    const rankLabel = String(8 - bx);
+
+                    return (
+                      <div
+                        key={`${bx}-${by}`}
+                        className={[
+                          "chessboard-square",
+                          (x + y) % 2 === 0
+                            ? "chessboard-square--black"
+                            : "chessboard-square--white",
+                          selected ? "chessboard-square--selected" : "",
+                          lm
+                            ? isCapture
+                              ? "chessboard-square--legal-capture"
+                              : "chessboard-square--legal-move"
+                            : "",
+                          frozenForPromotion || isThinking
+                            ? "chessboard-square--disabled"
+                            : "",
+                        ].join(" ")}
+                        onClick={() => handleSquareClick(bx, by)}
+                        onDrop={(e) => handleOnDrop(e, bx, by)}
+                        onDragOver={handleDragOver}
+                      >
+                        {isBottomEdge && (
+                          <span className="sq-label file">{fileLabel}</span>
+                        )}
+                        {isLeftEdge && (
+                          <span className="sq-label rank">{rankLabel}</span>
+                        )}
+
+                        <div
+                          className="chesspiece-wrapper"
+                          draggable={
+                            !!piece &&
+                            !(frozenForPromotion || isThinking) &&
+                            ((isWhiteTurn && piece.color === "white") ||
+                              (!isWhiteTurn && piece.color === "black")) &&
+                            ((isWhiteTurn && whiteMode === "human") ||
+                              (!isWhiteTurn && blackMode === "human"))
+                          }
+                          onDragStart={(e) => handleOnDrag(e, bx, by)}
+                        >
+                          <ChessPiece piece={piece} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

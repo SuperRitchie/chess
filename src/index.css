@@ -373,3 +373,98 @@ body {
   cursor: pointer;
   font-weight: 700;
 }
+
+/* =========================================================
+   LEFT RAIL (Portfolio / GitHub) — Figma-style light pill + shaded hover
+   ========================================================= */
+
+.app-shell {
+  display: flex;
+  align-items: flex-start;  /* don't stretch rail full height */
+  gap: 22px;
+}
+
+/* container pill */
+.left-rail {
+  width: 210px;
+  margin-top: 12px;
+
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 28px;
+  overflow: hidden;
+
+  position: relative;
+
+  /* subtle depth */
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+}
+
+/* right-side "notch" cut-outs */
+.left-rail::before,
+.left-rail::after {
+  content: "";
+  position: absolute;
+  right: -36px;
+  width: 72px;
+  height: 72px;
+
+  background: #1e1e1f;
+  border-radius: 999px;
+}
+
+.left-rail::before {
+  top: -36px;
+}
+
+.left-rail::after {
+  bottom: -36px;
+}
+
+/* tabs */
+.rail-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  height: 92px;
+  text-decoration: none;
+
+  font-weight: 800;
+  font-size: 22px;
+
+  /* bright default */
+  background: rgba(255, 255, 255, 0.35);
+  color: rgba(0, 0, 0, 0.78);
+
+  border-bottom: 1px solid rgba(255, 255, 255, 0.30);
+
+  /* smooth shading on hover */
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.rail-link--top {
+  background: rgba(120, 120, 120, 0.60);
+  color: rgba(255, 255, 255, 0.95);
+}
+
+.rail-link:last-child {
+  border-bottom: none;
+}
+
+/* hover shading (darker) */
+.rail-link:hover {
+  background: rgba(180, 180, 180, 0.55);
+  color: rgba(0, 0, 0, 0.85);
+}
+
+.rail-link--top:hover {
+  background: rgba(95, 95, 95, 0.72);
+  color: rgba(255, 255, 255, 0.98);
+}
+
+/* keyboard focus */
+.rail-link:focus-visible {
+  outline: 3px solid rgba(255, 255, 255, 0.55);
+  outline-offset: -3px;
+}
