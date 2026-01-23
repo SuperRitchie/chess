@@ -8,7 +8,7 @@ import { listLegalMoves, makeMove, getPiece } from "./chessRules";
 let _modelPromise = null;
 async function loadModel() {
   if (!_modelPromise) {
-    _modelPromise = tf.loadGraphModel(process.env.PUBLIC_URL + "/nn/model.json");
+    _modelPromise = tf.loadLayersModel(process.env.PUBLIC_URL + "/nn/model.json");
   }
   return _modelPromise;
 }
@@ -16,36 +16,28 @@ async function loadModel() {
 /**
  * Feature extractor (JS) must match Python features in ml/features.py.
  * We'll use 12 piece planes (one per piece type per color) + side-to-move plane.
- * Output shape: [8,8,13] -> flatten to [8*8*13].
+ * Output shape: [8,8,13] -> 4d tensor
  */
 function featuresFromBoard(pieces, isWhiteTurn) {
-  const planes = {
-    white: { pawn: [], knight: [], bishop: [], rook: [], queen: [], king: [] },
-    black: { pawn: [], knight: [], bishop: [], rook: [], queen: [], king: [] },
-  };
-  for (let x = 0; x < 8; x++) {
-    for (let y = 0; y < 8; y++) {
+  // tensor shape: [1, 8, 8, 13] (channels-last)
+  const buf = tf.buffer([1, 8, 8, 13], "float32");
+
+  const typeToIdx = { pawn: 0, knight: 1, bishop: 2, rook: 3, queen: 4, king: 5 };
+
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
       const p = getPiece(pieces, x, y);
-      const onehot = {
-        white: { pawn:0, knight:0, bishop:0, rook:0, queen:0, king:0 },
-        black: { pawn:0, knight:0, bishop:0, rook:0, queen:0, king:0 },
-      };
-      if (p) onehot[p.color][p.type] = 1;
-      Object.keys(planes).forEach(color => {
-        Object.keys(planes[color]).forEach(t => planes[color][t].push(onehot[color][t]));
-      });
+      if (p) {
+        const base = (p.color === "white") ? 0 : 6;     // white: 0..5, black: 6..11
+        const c = base + typeToIdx[p.type];
+        buf.set(1, 0, y, x, c);
+      }
+      // side-to-move plane (channel 12)
+      buf.set(isWhiteTurn ? 1 : 0, 0, y, x, 12);
     }
   }
-  const side = new Array(64).fill(isWhiteTurn ? 1 : 0);
 
-  // concat 12 piece planes + 1 side plane
-  const all = []
-    .concat(planes.white.pawn, planes.white.knight, planes.white.bishop, planes.white.rook, planes.white.queen, planes.white.king)
-    .concat(planes.black.pawn, planes.black.knight, planes.black.bishop, planes.black.rook, planes.black.queen, planes.black.king)
-    .flat()
-    .concat(side);
-
-  return tf.tensor(all, [1, 8 * 8 * 13]); // batch of 1
+  return buf.toTensor();
 }
 
 /**
@@ -71,7 +63,8 @@ export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {
     const promo = m.needsPromotion && !m.promotionType ? 'queen' : m.promotionType;
     const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
     // depth-1 because we already made one move
-    const score = await minimax(after, depth - 1, false, color === 'white' ? 'black' : 'white', nextEnPassant);
+    const nextColor = (color === "white") ? "black" : "white";
+    const score = await minimax(after, depth - 1, nextColor, nextEnPassant);
     if (score > bestScore) {
       bestScore = score;
       bestMove = { ...m, promotionType: promo };
@@ -81,25 +74,33 @@ export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {
 }
 
 
-async function minimax(pieces, depth, maximizing, color, enPassantTarget) {
+async function minimax(pieces, depth, color, enPassantTarget) {
   if (depth === 0) {
     const model = await loadModel();
-    const isWhiteTurn = (color === 'white');
+    const isWhiteTurn = (color === "white");
     return await evalPosition(model, pieces, isWhiteTurn);
   }
-  const moves = listLegalMoves(pieces, color, enPassantTarget);
-  if (moves.length === 0) return maximizing ? -Infinity : Infinity;
 
-  let best = maximizing ? -Infinity : Infinity;
-  for (const m of moves) {
-    const promo = m.needsPromotion && !m.promotionType ? 'queen' : m.promotionType;
-    const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
-    const val = await minimax(after, depth - 1, !maximizing, maximizing ? 'black' : 'white', nextEnPassant);
-    if (maximizing) {
-      best = Math.max(best, val);
-    } else {
-      best = Math.min(best, val);
-    }
+  const moves = listLegalMoves(pieces, color, enPassantTarget);
+  if (moves.length === 0) {
+    // checkmate or stalemate, need to refer back 
+    return (color === "white") ? -Infinity : Infinity;
   }
+
+  const maximizing = (color === "white"); // maximize White's eval
+  let best = maximizing ? -Infinity : Infinity;
+
+  const nextColor = (color === "white") ? "black" : "white";
+
+  for (const m of moves) {
+    const promo = m.needsPromotion && !m.promotionType ? "queen" : m.promotionType;
+    const { pieces: after, nextEnPassant } = makeMove(pieces, m.from, m.to, promo, enPassantTarget);
+
+    const val = await minimax(after, depth - 1, nextColor, nextEnPassant);
+
+    best = maximizing ? Math.max(best, val) : Math.min(best, val);
+  }
+
   return best;
 }
+

@@ -1,7 +1,8 @@
 # ml/train.py
 """
 Train a small TF model to regress Stockfish centipawn evals.
-Saves TFJS model at public/nn/model.json (+ weights).
+Saves TFJS model at public/nn/model.json (+ weights) and patches model.json
+to be tfjs-layers compatible (Keras 3 -> legacy node format).
 """
 import os
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # quieter logs in CI
@@ -61,9 +62,108 @@ def build_model(input_shape=(BOARD_H, BOARD_W, PLANES)):
     return model
 
 
+def patch_tfjs_model_json(path: pathlib.Path) -> None:
+    """
+    Patch Keras 3 style TFJS model.json to tfjs-layers compatible format:
+      - InputLayer: batch_shape -> batchInputShape
+      - inbound_nodes: object nodes -> legacy array nodes
+      - input_layers/output_layers: flat -> nested arrays
+    """
+    j = json.loads(path.read_text(encoding="utf-8"))
+
+    cfg = (
+        j.get("modelTopology", {})
+         .get("model_config", {})
+         .get("config", {})
+    )
+    layers = cfg.get("layers", [])
+    if not isinstance(layers, list):
+        raise ValueError("model.json missing modelTopology.model_config.config.layers")
+
+    # 1) InputLayer key
+    for layer in layers:
+        if layer.get("class_name") == "InputLayer":
+            c = layer.get("config", {})
+            if "batch_shape" in c and "batchInputShape" not in c:
+                c["batchInputShape"] = c.pop("batch_shape")
+
+    def get_history(arg):
+        # Accept either {"keras_history":[...]} or {"config":{"keras_history":[...]}}
+        if isinstance(arg, dict):
+            if isinstance(arg.get("keras_history"), list):
+                return arg["keras_history"]
+            c2 = arg.get("config")
+            if isinstance(c2, dict) and isinstance(c2.get("keras_history"), list):
+                return c2["keras_history"]
+        return None
+
+    # 2) inbound_nodes conversion
+    for layer in layers:
+        inbound = layer.get("inbound_nodes")
+        if not isinstance(inbound, list):
+            continue
+
+        # already legacy? (array-of-arrays)
+        if len(inbound) > 0 and all(isinstance(x, list) for x in inbound):
+            continue
+
+        new_inbound = []
+        for node in inbound:
+            if isinstance(node, dict) and isinstance(node.get("args"), list):
+                conns = []
+                for a in node["args"]:
+                    h = get_history(a)
+                    if h and len(h) >= 3:
+                        lname, nidx, tidx = h[:3]
+                        conns.append([lname, nidx, tidx, {}])
+                new_inbound.append(conns)
+            else:
+                new_inbound.append([])
+        layer["inbound_nodes"] = new_inbound
+
+    # 3) input_layers/output_layers nesting
+    il = cfg.get("input_layers")
+    if isinstance(il, list) and len(il) == 3 and isinstance(il[0], str):
+        cfg["input_layers"] = [il]
+    ol = cfg.get("output_layers")
+    if isinstance(ol, list) and len(ol) == 3 and isinstance(ol[0], str):
+        cfg["output_layers"] = [ol]
+
+    path.write_text(json.dumps(j), encoding="utf-8")
+
+
+def smoke_check_tfjs_json(path: pathlib.Path) -> None:
+    """
+    Fast structural checks so CI fails early if the JSON will break tfjs-layers.
+    (Doesn't require Node or a browser.)
+    """
+    j = json.loads(path.read_text(encoding="utf-8"))
+    cfg = j["modelTopology"]["model_config"]["config"]
+
+    # input/output layers must be nested arrays
+    il = cfg["input_layers"]
+    ol = cfg["output_layers"]
+    assert isinstance(il, list) and len(il) > 0 and isinstance(il[0], list), "input_layers not nested"
+    assert isinstance(ol, list) and len(ol) > 0 and isinstance(ol[0], list), "output_layers not nested"
+
+    # inbound_nodes entries must be arrays (legacy), not dict objects
+    for layer in cfg["layers"]:
+        inbound = layer.get("inbound_nodes", [])
+        if not isinstance(inbound, list):
+            raise AssertionError("inbound_nodes missing/invalid")
+        for node in inbound:
+            if not isinstance(node, list):
+                raise AssertionError("inbound_nodes contains non-list node (likely object style)")
+
+    # InputLayer should have batchInputShape
+    for layer in cfg["layers"]:
+        if layer.get("class_name") == "InputLayer":
+            c = layer.get("config", {})
+            assert "batchInputShape" in c, "InputLayer missing batchInputShape"
+
+
 def main():
     X, y = load_dataset()
-    # Auto-fix shape if features are flattened
     X = ensure_4d_board(X)
 
     n = len(X)
@@ -87,7 +187,13 @@ def main():
     # Save TFJS (direct Keras -> TFJS)
     import tensorflowjs as tfjs
     tfjs.converters.save_keras_model(model, str(OUT_DIR))
-    print("Saved TFJS model to", OUT_DIR / "model.json")
+
+    # Patch + validate
+    model_json = OUT_DIR / "model.json"
+    patch_tfjs_model_json(model_json)
+    smoke_check_tfjs_json(model_json)
+
+    print("Saved TFJS model to", model_json)
 
 
 if __name__ == "__main__":
