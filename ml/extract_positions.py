@@ -10,7 +10,7 @@ IN_PGN = pathlib.Path("ml/data/games.pgn")
 OUT_FEN = pathlib.Path("ml/data/positions.fen")
 random.seed(42)
 
-def sample_positions(pgn_path, max_games=10000, per_game=15, min_ply=12, max_ply=80):
+def sample_positions(pgn_path, max_games=2000, per_game=15, min_ply=12, max_ply=80):
     count = 0
     with open(pgn_path, "r", encoding="utf-8") as f:
         while True:

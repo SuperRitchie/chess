@@ -179,7 +179,7 @@ def main():
         Xtr,
         ytr,
         validation_data=(Xva, yva),
-        epochs=20,
+        epochs=6,
         batch_size=512,
         verbose=2,
     )
