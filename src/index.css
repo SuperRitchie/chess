@@ -468,3 +468,158 @@ body {
   outline: 3px solid rgba(255, 255, 255, 0.55);
   outline-offset: -3px;
 }
+
+/* =========================================================
+   MOBILE / RESPONSIVE
+   ========================================================= */
+
+/* Let mobile scroll */
+@media (max-width: 900px) {
+  body {
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  #root {
+    padding: 12px;
+    place-items: stretch;
+  }
+
+  /* Stack rail + card vertically */
+  .app-shell {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  /* Left rail becomes a top horizontal bar */
+  .left-rail {
+    width: 100%;
+    margin-top: 0;
+    border-radius: 18px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    overflow: hidden;
+  }
+
+  /* Remove the decorative notch cut-outs on mobile */
+  .left-rail::before,
+  .left-rail::after {
+    display: none;
+    content: none;
+  }
+
+  .rail-link {
+    height: 56px;
+    font-size: 18px;
+    border-bottom: none;
+  }
+  .rail-link:first-child {
+    border-right: 1px solid rgba(255, 255, 255, 0.30);
+  }
+
+  /* Main card: single column, auto height */
+  .chess-layout {
+    width: 100%;
+    height: auto;
+    padding: 14px;
+    gap: 14px;
+
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+  }
+
+  /* Side panel becomes shorter and scrollable */
+  .chess-sidepanel {
+    padding: 14px;
+    border-radius: 18px;
+    overflow: auto;
+    max-height: 38vh;
+  }
+
+  .turn-indicator {
+    font-size: 20px;
+    margin: 4px 0 12px;
+  }
+
+  /* Make the 4 mode buttons fit better */
+  .mode-row {
+    grid-template-columns: 78px 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .segmented {
+    gap: 8px;
+  }
+
+  .seg-btn {
+    padding: 9px 10px;
+    font-weight: 750;
+    font-size: 14px;
+    border-radius: 12px;
+  }
+
+  .pgn-title {
+    font-size: 18px;
+    margin: 14px 0 8px;
+  }
+
+  .pgn-box {
+    min-height: 120px;
+    max-height: 22vh;
+    font-size: 13px;
+  }
+
+  /* Top bar wraps nicely */
+  .board-topbar {
+    padding: 10px 12px;
+    border-radius: 16px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .ui-btn {
+    padding: 9px 12px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+
+  /* Board sizing: use viewport width on mobile */
+  .chessboard {
+    /* Keep some room for padding + topbar */
+    --board-size: min(92vw, 520px);
+
+    padding: 8px;
+    border-radius: 10px;
+  }
+
+  .sq-label {
+    font-size: 11px;
+  }
+
+  /* Prevent the board area from trying to force a tall fixed layout */
+  .board-area {
+    height: auto;
+    grid-template-rows: auto auto;
+  }
+
+  .chessboard-wrap {
+    height: auto;
+    padding-bottom: 8px;
+  }
+}
+
+/* Extra-small phones */
+@media (max-width: 420px) {
+  .seg-btn {
+    font-size: 13px;
+    padding: 8px 8px;
+  }
+  .mode-row {
+    grid-template-columns: 70px 1fr;
+  }
+  .rail-link {
+    font-size: 16px;
+  }
+}
