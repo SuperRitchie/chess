@@ -1,1 +1,1 @@
-playable at [ritchiek.tech/chess](https://ritchiek.tech/chess/)
+playable at [ritchiek.tech/chess](https://superritchie.github.io/chess/)
