@@ -1,6 +1,6 @@
 # chess + utils
 python-chess==1.999
-requests==2.34.1
+requests==2.34.2
 
 # ML stack (aligned so TF-JS + TF-DF work together)
 tensorflow==2.19.0
