@@ -1,11 +1,11 @@
 name: Nightly NN training
 
 on:
-    push:
-      branches: [ master ]
-    schedule:
-        - cron: "17 9 * * *"   # 09:17 utc daily
-    workflow_dispatch: {}
+  push:
+    branches: [ master ]
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -15,17 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Install Stockfish
         run: |
           sudo apt-get update
@@ -33,19 +30,14 @@ jobs:
           which stockfish
         env:
           DEBIAN_FRONTEND: noninteractive
-
       - name: Fetch Lichess games
         run: python ml/fetch_lichess.py
-
       - name: Extract positions
         run: python ml/extract_positions.py
-
       - name: Evaluate with Stockfish
         run: SF_DEPTH=12 STOCKFISH_PATH=stockfish python ml/stockfish_eval.py
-
       - name: Continue NN learning + export TFJS
-        run: python ml/train.py
-
+        run: python ml/train_safe_export.py
       - name: Commit updated brain and browser model
         run: |
           git config user.name "github-actions[bot]"
