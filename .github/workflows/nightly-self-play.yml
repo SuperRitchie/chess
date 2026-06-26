@@ -28,7 +28,7 @@ jobs:
         run: AZ_SELF_PLAY_GAMES=4 AZ_MCTS_SEARCHES=80 python ml/self_play.py
 
       - name: Continue policy-value learning and export model
-        run: python ml/train.py
+        run: python ml/train_safe_export.py
 
       - name: Commit updated model state
         run: |
