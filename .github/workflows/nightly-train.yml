@@ -51,9 +51,6 @@ jobs:
             echo "No model changes to commit"
             exit 0
           fi
-          git stash push --staged --include-untracked -m nightly-model-update
-          git pull --rebase origin master
-          git stash pop
-          git add public/nn ml/checkpoints ml/data/replay_buffer.json ml/training_history.json
           git commit -m "Nightly: continue NN learning"
+          git pull --rebase origin master
           git push
