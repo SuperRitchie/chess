@@ -1,6 +1,6 @@
 # ml/train.py
 """
-train the chess evaluator and keep a saved brain for the next run
+train the chess model and keep a saved brain for the next run
 """
 import os
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
@@ -13,9 +13,11 @@ import random
 import numpy as np
 import tensorflow as tf
 from features import board_to_features
+from policy_map import POLICY_SIZE
 
 LABELS = pathlib.Path("ml/data/labels.json")
-REPLAY_BUFFER = pathlib.Path("ml/data/replay_buffer.json")
+STOCKFISH_REPLAY_BUFFER = pathlib.Path("ml/data/replay_buffer.json")
+SELF_PLAY_BUFFER = pathlib.Path("ml/data/self_play_buffer.json")
 TRAINING_HISTORY = pathlib.Path("ml/training_history.json")
 CHECKPOINT_DIR = pathlib.Path("ml/checkpoints")
 CHECKPOINT_MODEL = CHECKPOINT_DIR / "chess_eval.keras"
@@ -27,6 +29,8 @@ CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 BOARD_H, BOARD_W, PLANES = 8, 8, 13
 FLAT_SIZE = BOARD_H * BOARD_W * PLANES
 MAX_REPLAY_ITEMS = int(os.environ.get("MAX_REPLAY_ITEMS", "50000"))
+MAX_SELF_PLAY_TRAIN = int(os.environ.get("AZ_MAX_SELF_PLAY_TRAIN", "4000"))
+MAX_STOCKFISH_TRAIN = int(os.environ.get("AZ_MAX_STOCKFISH_TRAIN", "8000"))
 COLD_START_EPOCHS = int(os.environ.get("COLD_START_EPOCHS", "6"))
 CONTINUE_EPOCHS = int(os.environ.get("CONTINUE_EPOCHS", "3"))
 COLD_START_LR = float(os.environ.get("COLD_START_LR", "1e-3"))
@@ -67,8 +71,8 @@ def normalize_labels(items: list[dict]) -> list[dict]:
     return normalized
 
 
-def merge_replay_buffer(new_items: list[dict]) -> list[dict]:
-    existing_items = normalize_labels(read_json_list(REPLAY_BUFFER))
+def merge_stockfish_replay_buffer(new_items: list[dict]) -> list[dict]:
+    existing_items = normalize_labels(read_json_list(STOCKFISH_REPLAY_BUFFER))
     new_items = normalize_labels(new_items)
 
     by_fen = {item["fen"]: item for item in existing_items}
@@ -87,23 +91,106 @@ def merge_replay_buffer(new_items: list[dict]) -> list[dict]:
         merged = list(new_by_fen.values()) + old_items[:room_for_old]
 
     random.shuffle(merged)
-    write_json(REPLAY_BUFFER, merged)
-    print(f"[train] replay buffer {len(merged)} positions, new {len(new_items)}")
+    write_json(STOCKFISH_REPLAY_BUFFER, merged)
+    print(f"[train] Stockfish replay buffer {len(merged)} positions, new {len(new_items)}")
     return merged
 
 
-def load_dataset():
-    fresh_items = normalize_labels(read_json_list(LABELS))
-    items = merge_replay_buffer(fresh_items)
+def cp_to_value(cp: float) -> float:
+    return float(np.tanh(np.clip(cp, -2000.0, 2000.0) / 600.0))
 
-    X, y = [], []
+
+def dense_policy_from_sparse(policy_items) -> np.ndarray:
+    policy = np.zeros((POLICY_SIZE,), dtype=np.float32)
+    for item in policy_items or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        idx, prob = item
+        try:
+            idx = int(idx)
+            prob = float(prob)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < POLICY_SIZE and prob > 0:
+            policy[idx] += prob
+    total = float(np.sum(policy))
+    if total > 0:
+        policy /= total
+    return policy
+
+
+def load_self_play_samples():
+    items = read_json_list(SELF_PLAY_BUFFER)[-MAX_SELF_PLAY_TRAIN:]
+    X, policies, values = [], [], []
+    for item in items:
+        fen = item.get("fen")
+        if not fen:
+            continue
+        policy = dense_policy_from_sparse(item.get("policy"))
+        if float(np.sum(policy)) <= 0:
+            continue
+        try:
+            z = float(item.get("z"))
+        except (TypeError, ValueError):
+            continue
+        X.append(board_to_features(fen))
+        policies.append(policy)
+        values.append(np.clip(z, -1.0, 1.0))
+    return X, policies, values
+
+
+def load_stockfish_samples():
+    fresh_items = normalize_labels(read_json_list(LABELS))
+    items = merge_stockfish_replay_buffer(fresh_items)[-MAX_STOCKFISH_TRAIN:]
+    X, values = [], []
     for item in items:
         X.append(board_to_features(item["fen"]))
-        y.append(np.clip(float(item["cp"]), -2000.0, 2000.0))
+        values.append(cp_to_value(float(item["cp"])))
+    return X, values, len(fresh_items), len(items)
 
-    X = np.stack(X).astype(np.float32)
-    y = np.array(y, dtype=np.float32)
-    return X, y, len(fresh_items), len(items)
+
+def load_dataset():
+    self_X, self_policy, self_value = load_self_play_samples()
+    stock_X, stock_value, fresh_count, stockfish_count = load_stockfish_samples()
+
+    X = []
+    policy_y = []
+    value_y = []
+    policy_weights = []
+    value_weights = []
+
+    for x, policy, value in zip(self_X, self_policy, self_value):
+        X.append(x)
+        policy_y.append(policy)
+        value_y.append(value)
+        policy_weights.append(1.0)
+        value_weights.append(1.0)
+
+    zero_policy = np.zeros((POLICY_SIZE,), dtype=np.float32)
+    for x, value in zip(stock_X, stock_value):
+        X.append(x)
+        policy_y.append(zero_policy.copy())
+        value_y.append(value)
+        policy_weights.append(0.0)
+        value_weights.append(1.0)
+
+    if not X:
+        raise ValueError("no training samples found")
+
+    combined = list(zip(X, policy_y, value_y, policy_weights, value_weights))
+    random.shuffle(combined)
+    X, policy_y, value_y, policy_weights, value_weights = zip(*combined)
+
+    return (
+        np.stack(X).astype(np.float32),
+        np.stack(policy_y).astype(np.float32),
+        np.array(value_y, dtype=np.float32).reshape(-1, 1),
+        np.array(policy_weights, dtype=np.float32),
+        np.array(value_weights, dtype=np.float32),
+        len(self_X),
+        fresh_count,
+        stockfish_count,
+    )
 
 
 def ensure_4d_board(X: np.ndarray) -> np.ndarray:
@@ -120,8 +207,12 @@ def ensure_4d_board(X: np.ndarray) -> np.ndarray:
 def compile_model(model: tf.keras.Model, learning_rate: float) -> tf.keras.Model:
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate),
-        loss="huber",
-        metrics=[tf.keras.metrics.MeanAbsoluteError(name="mae")],
+        loss={
+            "policy_logits": tf.keras.losses.CategoricalCrossentropy(from_logits=True),
+            "value": tf.keras.losses.MeanSquaredError(),
+        },
+        loss_weights={"policy_logits": 1.0, "value": 1.0},
+        metrics={"value": [tf.keras.metrics.MeanAbsoluteError(name="mae")]},
     )
     return model
 
@@ -132,18 +223,31 @@ def build_model(input_shape=(BOARD_H, BOARD_W, PLANES), learning_rate=COLD_START
     x = tf.keras.layers.Conv2D(64, kernel_size=3, padding="same", activation="relu")(x)
     x = tf.keras.layers.Flatten()(x)
     x = tf.keras.layers.Dense(256, activation="relu")(x)
-    out = tf.keras.layers.Dense(1, activation="linear", name="cp")(x)
-    model = tf.keras.Model(inp, out)
+    policy_logits = tf.keras.layers.Dense(POLICY_SIZE, activation="linear", name="policy_logits")(x)
+    value = tf.keras.layers.Dense(1, activation="tanh", name="value")(x)
+    model = tf.keras.Model(inp, [policy_logits, value])
     return compile_model(model, learning_rate)
+
+
+def is_dual_head_model(model: tf.keras.Model) -> bool:
+    if len(model.outputs) != 2:
+        return False
+    output_names = {out.name.split("/")[0] for out in model.outputs}
+    return "policy_logits" in output_names and "value" in output_names
 
 
 def load_or_build_model(input_shape):
     if CHECKPOINT_MODEL.exists():
-        print(f"[train] loading saved brain from {CHECKPOINT_MODEL}")
-        model = tf.keras.models.load_model(CHECKPOINT_MODEL, compile=False)
-        return compile_model(model, CONTINUE_LR), True
+        try:
+            model = tf.keras.models.load_model(CHECKPOINT_MODEL, compile=False)
+            if is_dual_head_model(model):
+                print(f"[train] loading saved dual-head brain from {CHECKPOINT_MODEL}")
+                return compile_model(model, CONTINUE_LR), True
+            print("[train] saved brain is value-only, starting a new dual-head brain")
+        except Exception as exc:
+            print(f"[train] could not load saved brain, starting fresh: {exc}")
 
-    print("[train] no saved brain found, starting from scratch")
+    print("[train] no compatible saved brain found, starting from scratch")
     return build_model(input_shape, COLD_START_LR), False
 
 
@@ -229,13 +333,14 @@ def smoke_check_tfjs_json(path: pathlib.Path) -> None:
             assert "batchInputShape" in c, "InputLayer missing batchInputShape"
 
 
-def append_training_history(history, resumed, fresh_count, replay_count, epochs):
+def append_training_history(history, resumed, self_play_count, fresh_count, stockfish_count, epochs):
     records = read_json_list(TRAINING_HISTORY)
     record = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
         "resumed_from_checkpoint": resumed,
-        "fresh_positions": fresh_count,
-        "replay_positions": replay_count,
+        "self_play_positions": self_play_count,
+        "fresh_stockfish_positions": fresh_count,
+        "stockfish_replay_positions": stockfish_count,
         "epochs": epochs,
     }
 
@@ -247,16 +352,27 @@ def append_training_history(history, resumed, fresh_count, replay_count, epochs)
     write_json(TRAINING_HISTORY, records[-365:])
 
 
+def split_arrays(*arrays, train_ratio=0.9):
+    n = len(arrays[0])
+    split = max(1, int(train_ratio * n))
+    if split >= n:
+        split = n - 1 if n > 1 else n
+    return [(arr[:split], arr[split:]) for arr in arrays]
+
+
 def main():
-    X, y, fresh_count, replay_count = load_dataset()
+    X, policy_y, value_y, policy_weights, value_weights, self_play_count, fresh_count, stockfish_count = load_dataset()
     X = ensure_4d_board(X)
 
-    n = len(X)
-    split = int(0.9 * n)
-    Xtr, Xva = X[:split], X[split:]
-    ytr, yva = y[:split], y[split:]
+    (Xtr, Xva), (Ptr, Pva), (Vtr, Vva), (PWtr, PWva), (VWtr, VWva) = split_arrays(
+        X,
+        policy_y,
+        value_y,
+        policy_weights,
+        value_weights,
+    )
 
-    print(f"[train] Xtr {Xtr.shape}, Xva {Xva.shape}, ytr {ytr.shape}, yva {yva.shape}")
+    print(f"[train] Xtr {Xtr.shape}, Xva {Xva.shape}, self-play {self_play_count}, Stockfish replay {stockfish_count}")
 
     model, resumed = load_or_build_model(X.shape[1:])
     epochs = CONTINUE_EPOCHS if resumed else COLD_START_EPOCHS
@@ -271,10 +387,15 @@ def main():
 
     history = model.fit(
         Xtr,
-        ytr,
-        validation_data=(Xva, yva),
+        {"policy_logits": Ptr, "value": Vtr},
+        validation_data=(
+            Xva,
+            {"policy_logits": Pva, "value": Vva},
+            {"policy_logits": PWva, "value": VWva},
+        ),
+        sample_weight={"policy_logits": PWtr, "value": VWtr},
         epochs=epochs,
-        batch_size=512,
+        batch_size=256,
         verbose=2,
         callbacks=callbacks,
         shuffle=True,
@@ -289,7 +410,7 @@ def main():
     model_json = OUT_DIR / "model.json"
     patch_tfjs_model_json(model_json)
     smoke_check_tfjs_json(model_json)
-    append_training_history(history, resumed, fresh_count, replay_count, epochs)
+    append_training_history(history, resumed, self_play_count, fresh_count, stockfish_count, epochs)
 
     print(f"[train] saved TFJS model to {model_json}")
 
