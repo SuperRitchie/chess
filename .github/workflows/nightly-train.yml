@@ -4,7 +4,7 @@ on:
     push:
       branches: [ master ]
     schedule:
-        - cron: "17 9 * * *"   # 09:17 UTC daily (~02:17 PDT / 01:17 PST)
+        - cron: "17 9 * * *"   # 09:17 utc daily
     workflow_dispatch: {}
 
 permissions:
@@ -43,13 +43,17 @@ jobs:
       - name: Evaluate with Stockfish
         run: SF_DEPTH=12 STOCKFISH_PATH=stockfish python ml/stockfish_eval.py
 
-      - name: Train NN + export TFJS
+      - name: Continue NN learning + export TFJS
         run: python ml/train.py
 
-      - name: Commit updated model
+      - name: Commit updated brain and browser model
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add public/nn
-          git commit -m "Nightly: refresh NN model"
+          git add public/nn ml/checkpoints ml/data/replay_buffer.json ml/training_history.json
+          if git diff --cached --quiet; then
+            echo "No model changes to commit"
+            exit 0
+          fi
+          git commit -m "Nightly: continue NN learning"
           git push
