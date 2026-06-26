@@ -28,7 +28,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Generate self training games
+      - name: Generate games
         run: AZ_SELF_PLAY_GAMES=4 AZ_MCTS_SEARCHES=80 python ml/self_play.py
 
       - name: Continue policy-value learning and export model
@@ -43,9 +43,6 @@ jobs:
             echo "No model changes to commit"
             exit 0
           fi
-          git stash push --staged --include-untracked -m nightly-self-training-update
-          git pull --rebase origin master
-          git stash pop
-          git add public/nn ml/checkpoints ml/data/self_play_buffer.json ml/training_history.json
           git commit -m "Nightly: continue self training"
+          git pull --rebase origin master
           git push
