@@ -207,12 +207,12 @@ def ensure_4d_board(X: np.ndarray) -> np.ndarray:
 def compile_model(model: tf.keras.Model, learning_rate: float) -> tf.keras.Model:
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate),
-        loss={
-            "policy_logits": tf.keras.losses.CategoricalCrossentropy(from_logits=True),
-            "value": tf.keras.losses.MeanSquaredError(),
-        },
-        loss_weights={"policy_logits": 1.0, "value": 1.0},
-        metrics={"value": [tf.keras.metrics.MeanAbsoluteError(name="mae")]},
+        loss=[
+            tf.keras.losses.CategoricalCrossentropy(from_logits=True),
+            tf.keras.losses.MeanSquaredError(),
+        ],
+        loss_weights=[1.0, 1.0],
+        metrics=[[], [tf.keras.metrics.MeanAbsoluteError(name="mae")]],
     )
     return model
 
@@ -232,8 +232,8 @@ def build_model(input_shape=(BOARD_H, BOARD_W, PLANES), learning_rate=COLD_START
 def is_dual_head_model(model: tf.keras.Model) -> bool:
     if len(model.outputs) != 2:
         return False
-    output_names = {out.name.split("/")[0] for out in model.outputs}
-    return "policy_logits" in output_names and "value" in output_names
+    output_names = set(getattr(model, "output_names", []))
+    return not output_names or {"policy_logits", "value"}.issubset(output_names)
 
 
 def load_or_build_model(input_shape):
@@ -387,13 +387,9 @@ def main():
 
     history = model.fit(
         Xtr,
-        {"policy_logits": Ptr, "value": Vtr},
-        validation_data=(
-            Xva,
-            {"policy_logits": Pva, "value": Vva},
-            {"policy_logits": PWva, "value": VWva},
-        ),
-        sample_weight={"policy_logits": PWtr, "value": VWtr},
+        [Ptr, Vtr],
+        validation_data=(Xva, [Pva, Vva], [PWva, VWva]),
+        sample_weight=[PWtr, VWtr],
         epochs=epochs,
         batch_size=256,
         verbose=2,
