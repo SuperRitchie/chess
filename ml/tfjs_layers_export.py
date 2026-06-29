@@ -74,4 +74,10 @@ def export_keras_layers_model(model: tf.keras.Model, out_dir: pathlib.Path) -> p
 
     model_json_path = out_dir / "model.json"
     model_json_path.write_text(json.dumps(model_json), encoding="utf-8")
+
+    if not weights_manifest:
+        raise ValueError("TFJS export produced no weights")
+    if not (out_dir / WEIGHTS_FILENAME).exists():
+        raise FileNotFoundError(f"TFJS weight shard missing: {WEIGHTS_FILENAME}")
+
     return model_json_path
