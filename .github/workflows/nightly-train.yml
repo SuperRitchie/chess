@@ -41,7 +41,14 @@ jobs:
       - name: Evaluate with Stockfish
         run: SF_DEPTH=12 STOCKFISH_PATH=stockfish python ml/stockfish_eval.py
       - name: Continue NN learning + export TFJS
-        run: python ml/train_safe_export.py
+        run: |
+          set -o pipefail
+          python ml/train_safe_export.py 2>&1 | sed \
+            -e '/ydf\.readthedocs\.io/d' \
+            -e '/successor of TensorFlow Decision Forests/d' \
+            -e '/failed to lookup keras version from the file/d' \
+            -e '/this is likely a weight only file/d' \
+            -e '/HDF5 file format is considered legacy/d'
       - name: Commit updated brain and browser model
         run: |
           git config user.name "github-actions[bot]"
