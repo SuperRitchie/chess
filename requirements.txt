@@ -2,10 +2,9 @@
 python-chess==1.999
 requests==2.34.2
 
-# ML stack (aligned so TF-JS + TF-DF work together)
-tensorflow==2.19.0
-tensorflow-decision-forests==1.12.0
-tensorflowjs==4.20.0
+# ML stack
+# CPU-only TensorFlow avoids CUDA plugin noise on GitHub's Ubuntu runners.
+tensorflow-cpu==2.19.0
 
 # Numpy compatible with TF 2.19 on Py3.11
 numpy==1.26.4
