@@ -4,7 +4,7 @@ requests==2.34.2
 
 # ML stack
 # CPU-only TensorFlow avoids CUDA plugin noise on GitHub's Ubuntu runners.
-tensorflow-cpu==2.19.0
+tensorflow-cpu==2.21.0
 
 # Numpy compatible with TF 2.19 on Py3.11
 numpy==1.26.4
