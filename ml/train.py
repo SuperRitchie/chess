@@ -35,6 +35,7 @@ COLD_START_EPOCHS = int(os.environ.get("COLD_START_EPOCHS", "6"))
 CONTINUE_EPOCHS = int(os.environ.get("CONTINUE_EPOCHS", "3"))
 COLD_START_LR = float(os.environ.get("COLD_START_LR", "1e-3"))
 CONTINUE_LR = float(os.environ.get("CONTINUE_LR", "2e-4"))
+MIN_VALIDATION_IMPROVEMENT = float(os.environ.get("AZ_MIN_VALIDATION_IMPROVEMENT", "0.0"))
 TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 
 random.seed(TRAIN_SEED)
@@ -236,19 +237,76 @@ def is_dual_head_model(model: tf.keras.Model) -> bool:
     return not output_names or {"policy_logits", "value"}.issubset(output_names)
 
 
-def load_or_build_model(input_shape):
-    if CHECKPOINT_MODEL.exists():
-        try:
-            model = tf.keras.models.load_model(CHECKPOINT_MODEL, compile=False)
-            if is_dual_head_model(model):
-                print(f"[train] loading saved dual-head brain from {CHECKPOINT_MODEL}")
-                return compile_model(model, CONTINUE_LR), True
-            print("[train] saved brain is value-only, starting a new dual-head brain")
-        except Exception as exc:
+def load_saved_dual_head_model(learning_rate: float, *, quiet: bool = False) -> tf.keras.Model | None:
+    if not CHECKPOINT_MODEL.exists():
+        return None
+    try:
+        model = tf.keras.models.load_model(CHECKPOINT_MODEL, compile=False)
+    except Exception as exc:
+        if not quiet:
             print(f"[train] could not load saved brain, starting fresh: {exc}")
+        return None
+
+    if not is_dual_head_model(model):
+        if not quiet:
+            print("[train] saved brain is value-only, starting a new dual-head brain")
+        return None
+
+    return compile_model(model, learning_rate)
+
+
+def load_or_build_model(input_shape):
+    model = load_saved_dual_head_model(CONTINUE_LR)
+    if model is not None:
+        print(f"[train] loading saved dual-head brain from {CHECKPOINT_MODEL}")
+        return model, True
 
     print("[train] no compatible saved brain found, starting from scratch")
     return build_model(input_shape, COLD_START_LR), False
+
+
+def evaluate_model(model: tf.keras.Model | None, X, P, V, PW, VW, label: str) -> dict | None:
+    if model is None:
+        return None
+    try:
+        metrics = model.evaluate(
+            X,
+            [P, V],
+            sample_weight=[PW, VW],
+            batch_size=256,
+            verbose=0,
+            return_dict=True,
+        )
+    except Exception as exc:
+        print(f"[train] could not evaluate {label} model: {exc}")
+        return None
+
+    metrics = {key: float(value) for key, value in metrics.items()}
+    loss = metrics.get("loss")
+    if loss is not None:
+        print(f"[train] {label} validation loss {loss:.6f}")
+    else:
+        print(f"[train] {label} validation metrics {metrics}")
+    return metrics
+
+
+def should_accept_candidate(candidate_eval: dict | None, baseline_eval: dict | None, resumed: bool) -> tuple[bool, str]:
+    if not resumed or baseline_eval is None:
+        return True, "no_previous_compatible_checkpoint"
+    if candidate_eval is None:
+        return False, "candidate_validation_failed"
+
+    baseline_loss = baseline_eval.get("loss")
+    candidate_loss = candidate_eval.get("loss")
+    if baseline_loss is None or not np.isfinite(baseline_loss):
+        return True, "previous_validation_loss_unavailable"
+    if candidate_loss is None or not np.isfinite(candidate_loss):
+        return False, "candidate_validation_loss_unavailable"
+
+    required_loss = baseline_loss - MIN_VALIDATION_IMPROVEMENT
+    if candidate_loss <= required_loss:
+        return True, "candidate_validation_loss_improved"
+    return False, "candidate_validation_loss_did_not_improve"
 
 
 def patch_tfjs_model_json(path: pathlib.Path) -> None:
@@ -333,7 +391,28 @@ def smoke_check_tfjs_json(path: pathlib.Path) -> None:
             assert "batchInputShape" in c, "InputLayer missing batchInputShape"
 
 
-def append_training_history(history, resumed, self_play_count, fresh_count, stockfish_count, epochs):
+def add_eval_metrics(record: dict, prefix: str, metrics: dict | None) -> None:
+    if not metrics:
+        return
+    for key, value in metrics.items():
+        try:
+            record[f"{prefix}_{key}"] = float(value)
+        except (TypeError, ValueError):
+            continue
+
+
+def append_training_history(
+    history,
+    resumed,
+    self_play_count,
+    fresh_count,
+    stockfish_count,
+    epochs,
+    accepted,
+    gate_reason,
+    baseline_eval,
+    candidate_eval,
+):
     records = read_json_list(TRAINING_HISTORY)
     record = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -342,11 +421,17 @@ def append_training_history(history, resumed, self_play_count, fresh_count, stoc
         "fresh_stockfish_positions": fresh_count,
         "stockfish_replay_positions": stockfish_count,
         "epochs": epochs,
+        "candidate_accepted": accepted,
+        "gate_reason": gate_reason,
+        "min_validation_improvement": MIN_VALIDATION_IMPROVEMENT,
     }
 
     for key, values in history.history.items():
         if values:
             record[f"final_{key}"] = float(values[-1])
+
+    add_eval_metrics(record, "baseline_validation", baseline_eval)
+    add_eval_metrics(record, "candidate_validation", candidate_eval)
 
     records.append(record)
     write_json(TRAINING_HISTORY, records[-365:])
@@ -374,8 +459,11 @@ def main():
 
     print(f"[train] Xtr {Xtr.shape}, Xva {Xva.shape}, self-play {self_play_count}, Stockfish replay {stockfish_count}")
 
+    baseline_model = load_saved_dual_head_model(CONTINUE_LR, quiet=True)
     model, resumed = load_or_build_model(X.shape[1:])
     epochs = CONTINUE_EPOCHS if resumed else COLD_START_EPOCHS
+
+    baseline_eval = evaluate_model(baseline_model, Xva, Pva, Vva, PWva, VWva, "previous")
 
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
@@ -397,18 +485,36 @@ def main():
         shuffle=True,
     )
 
-    model.save(CHECKPOINT_MODEL)
-    print(f"[train] saved brain to {CHECKPOINT_MODEL}")
+    candidate_eval = evaluate_model(model, Xva, Pva, Vva, PWva, VWva, "candidate")
+    accepted, gate_reason = should_accept_candidate(candidate_eval, baseline_eval, resumed)
+    print(f"[train] candidate gate: accepted={accepted} reason={gate_reason}")
 
-    import tensorflowjs as tfjs
-    tfjs.converters.save_keras_model(model, str(OUT_DIR))
+    if accepted:
+        model.save(CHECKPOINT_MODEL)
+        print(f"[train] saved accepted brain to {CHECKPOINT_MODEL}")
 
-    model_json = OUT_DIR / "model.json"
-    patch_tfjs_model_json(model_json)
-    smoke_check_tfjs_json(model_json)
-    append_training_history(history, resumed, self_play_count, fresh_count, stockfish_count, epochs)
+        import tensorflowjs as tfjs
+        tfjs.converters.save_keras_model(model, str(OUT_DIR))
 
-    print(f"[train] saved TFJS model to {model_json}")
+        model_json = OUT_DIR / "model.json"
+        patch_tfjs_model_json(model_json)
+        smoke_check_tfjs_json(model_json)
+        print(f"[train] saved accepted TFJS model to {model_json}")
+    else:
+        print("[train] rejected candidate; keeping previous checkpoint and browser model")
+
+    append_training_history(
+        history,
+        resumed,
+        self_play_count,
+        fresh_count,
+        stockfish_count,
+        epochs,
+        accepted,
+        gate_reason,
+        baseline_eval,
+        candidate_eval,
+    )
 
 
 if __name__ == "__main__":
