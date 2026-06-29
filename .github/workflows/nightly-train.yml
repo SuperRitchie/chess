@@ -52,5 +52,7 @@ jobs:
             exit 0
           fi
           git commit -m "Nightly: continue NN learning"
+          git reset --hard HEAD
+          git clean -fd
           git pull --rebase origin master
           git push
