@@ -44,5 +44,7 @@ jobs:
             exit 0
           fi
           git commit -m "Nightly: continue self training"
+          git reset --hard HEAD
+          git clean -fd
           git pull --rebase origin master
           git push
