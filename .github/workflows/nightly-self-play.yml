@@ -38,13 +38,29 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          artifact_dir="$(mktemp -d)"
+          mkdir -p "$artifact_dir/public" "$artifact_dir/ml/data" "$artifact_dir/ml/checkpoints"
+          cp -a public/nn "$artifact_dir/public/"
+          cp -a ml/checkpoints/. "$artifact_dir/ml/checkpoints/"
+          cp -a ml/data/self_play_buffer.json "$artifact_dir/ml/data/self_play_buffer.json"
+          cp -a ml/training_history.json "$artifact_dir/ml/training_history.json"
+
+          git fetch origin master
+          git reset --hard origin/master
+          git clean -fd
+
+          rm -rf public/nn ml/checkpoints
+          mkdir -p public ml/checkpoints ml/data
+          cp -a "$artifact_dir/public/nn" public/
+          cp -a "$artifact_dir/ml/checkpoints/." ml/checkpoints/
+          cp -a "$artifact_dir/ml/data/self_play_buffer.json" ml/data/self_play_buffer.json
+          cp -a "$artifact_dir/ml/training_history.json" ml/training_history.json
+
           git add public/nn ml/checkpoints ml/data/self_play_buffer.json ml/training_history.json
           if git diff --cached --quiet; then
             echo "No model changes to commit"
             exit 0
           fi
           git commit -m "Nightly: continue self training"
-          git reset --hard HEAD
-          git clean -fd
-          git pull --rebase origin master
           git push
