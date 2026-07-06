@@ -27,7 +27,7 @@ sys.modules["tensorflowjs"] = types.SimpleNamespace(
     converters=types.SimpleNamespace(save_keras_model=_save_keras_model)
 )
 
-from train import main
+from train_fixed_eval import main
 
 
 if __name__ == "__main__":
