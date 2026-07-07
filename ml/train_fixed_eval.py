@@ -18,6 +18,7 @@ import train
 FIXED_EVAL_SET = train.pathlib.Path("ml/data/fixed_eval_set.json")
 FIXED_EVAL_SELF = int(os.environ.get("AZ_FIXED_EVAL_SELF", "512"))
 FIXED_EVAL_STOCKFISH = int(os.environ.get("AZ_FIXED_EVAL_STOCKFISH", "512"))
+_EPS = 1e-7
 
 
 def _valid_self_play_sample(item: dict) -> dict | None:
@@ -104,14 +105,17 @@ def fixed_eval_arrays():
         fen = sample.get("fen")
         if not fen:
             continue
-        X.append(train.board_to_features(fen))
+
         if source == "self_play":
             policy = train.dense_policy_from_sparse(sample.get("policy"))
+            if float(np.sum(policy)) <= 0:
+                continue
             try:
                 value = float(sample.get("z"))
             except (TypeError, ValueError):
                 continue
-            policy_y.append(policy)
+            X.append(train.board_to_features(fen))
+            policy_y.append(policy.astype(np.float32))
             value_y.append(np.clip(value, -1.0, 1.0))
             policy_weights.append(1.0)
             value_weights.append(1.0)
@@ -121,28 +125,84 @@ def fixed_eval_arrays():
                 cp = float(sample.get("cp", 0.0))
             except (TypeError, ValueError):
                 continue
+            X.append(train.board_to_features(fen))
             policy_y.append(zero_policy.copy())
             value_y.append(train.cp_to_value(cp))
             policy_weights.append(0.0)
             value_weights.append(1.0)
             stockfish_count += 1
-        else:
-            continue
 
     if not X:
         raise ValueError("fixed evaluation set has no usable samples")
 
+    X_arr = train.ensure_4d_board(np.stack(X).astype(np.float32))
+    P_arr = np.stack(policy_y).astype(np.float32)
+    V_arr = np.array(value_y, dtype=np.float32).reshape(-1, 1)
+    PW_arr = np.array(policy_weights, dtype=np.float32)
+    VW_arr = np.array(value_weights, dtype=np.float32)
+
+    if not (len(X_arr) == len(P_arr) == len(V_arr) == len(PW_arr) == len(VW_arr)):
+        raise ValueError("fixed evaluation arrays have inconsistent lengths")
+
     print(
-        f"[train] fixed eval set {len(X)} positions "
+        f"[train] fixed eval set {len(X_arr)} positions "
         f"(self-play {self_count}, Stockfish {stockfish_count})"
     )
-    return (
-        np.stack(X).astype(np.float32),
-        np.stack(policy_y).astype(np.float32),
-        np.array(value_y, dtype=np.float32).reshape(-1, 1),
-        np.array(policy_weights, dtype=np.float32),
-        np.array(value_weights, dtype=np.float32),
+    return X_arr, P_arr, V_arr, PW_arr, VW_arr
+
+
+def _softmax_cross_entropy(labels: np.ndarray, logits: np.ndarray) -> np.ndarray:
+    logits = logits.astype(np.float32)
+    shifted = logits - np.max(logits, axis=1, keepdims=True)
+    log_probs = shifted - np.log(np.sum(np.exp(shifted), axis=1, keepdims=True) + _EPS)
+    return -np.sum(labels * log_probs, axis=1)
+
+
+def evaluate_fixed_model(model: tf.keras.Model | None, X, P, V, PW, VW, label: str) -> dict | None:
+    if model is None:
+        return None
+    try:
+        predictions = model.predict(X, batch_size=256, verbose=0)
+    except Exception as exc:
+        print(f"[train] could not predict with {label} model: {exc}")
+        return None
+
+    if not isinstance(predictions, (list, tuple)) or len(predictions) != 2:
+        print(f"[train] could not evaluate {label} model: expected two outputs")
+        return None
+
+    policy_logits = np.asarray(predictions[0], dtype=np.float32)
+    value_pred = np.asarray(predictions[1], dtype=np.float32).reshape(-1, 1)
+
+    policy_den = max(float(np.sum(PW)), _EPS)
+    value_den = max(float(np.sum(VW)), _EPS)
+    policy_loss = float(np.sum(_softmax_cross_entropy(P, policy_logits) * PW) / policy_den)
+    value_errors = np.square(V - value_pred).reshape(-1)
+    value_abs_errors = np.abs(V - value_pred).reshape(-1)
+    value_loss = float(np.sum(value_errors * VW) / value_den)
+    value_mae = float(np.sum(value_abs_errors * VW) / value_den)
+    total_loss = policy_loss + value_loss
+
+    metrics = {
+        "loss": total_loss,
+        "policy_logits_loss": policy_loss,
+        "value_loss": value_loss,
+        "value_mae": value_mae,
+    }
+    print(
+        f"[train] {label} validation loss {total_loss:.6f} "
+        f"(policy {policy_loss:.6f}, value {value_loss:.6f}, value_mae {value_mae:.6f})"
     )
+    return metrics
+
+
+def accept_from_fixed_eval(candidate_eval: dict | None, baseline_eval: dict | None, resumed: bool) -> tuple[bool, str]:
+    if candidate_eval is None:
+        return False, "fixed_eval_candidate_failed"
+    if resumed and baseline_eval is None:
+        return False, "fixed_eval_previous_failed"
+    accepted, reason = train.should_accept_candidate(candidate_eval, baseline_eval, resumed)
+    return accepted, f"fixed_eval_{reason}"
 
 
 def main():
@@ -165,7 +225,7 @@ def main():
     epochs = train.CONTINUE_EPOCHS if resumed else train.COLD_START_EPOCHS
 
     moving_baseline_eval = train.evaluate_model(baseline_model, Xva, Pva, Vva, PWva, VWva, "previous moving")
-    fixed_baseline_eval = train.evaluate_model(baseline_model, Xev, Pev, Vev, PWev, VWev, "previous fixed")
+    fixed_baseline_eval = evaluate_fixed_model(baseline_model, Xev, Pev, Vev, PWev, VWev, "previous fixed")
 
     callbacks = [
         tf.keras.callbacks.EarlyStopping(
@@ -188,9 +248,9 @@ def main():
     )
 
     moving_candidate_eval = train.evaluate_model(model, Xva, Pva, Vva, PWva, VWva, "candidate moving")
-    fixed_candidate_eval = train.evaluate_model(model, Xev, Pev, Vev, PWev, VWev, "candidate fixed")
-    accepted, gate_reason = train.should_accept_candidate(fixed_candidate_eval, fixed_baseline_eval, resumed)
-    print(f"[train] candidate gate: accepted={accepted} reason=fixed_eval_{gate_reason}")
+    fixed_candidate_eval = evaluate_fixed_model(model, Xev, Pev, Vev, PWev, VWev, "candidate fixed")
+    accepted, gate_reason = accept_from_fixed_eval(fixed_candidate_eval, fixed_baseline_eval, resumed)
+    print(f"[train] candidate gate: accepted={accepted} reason={gate_reason}")
 
     if accepted:
         model.save(train.CHECKPOINT_MODEL)
@@ -214,12 +274,11 @@ def main():
         stockfish_count,
         epochs,
         accepted,
-        f"fixed_eval_{gate_reason}",
+        gate_reason,
         fixed_baseline_eval,
         fixed_candidate_eval,
     )
 
-    # Log moving-split metrics for debugging without using them for the accept gate.
     if moving_baseline_eval and moving_candidate_eval:
         baseline_loss = moving_baseline_eval.get("loss")
         candidate_loss = moving_candidate_eval.get("loss")
