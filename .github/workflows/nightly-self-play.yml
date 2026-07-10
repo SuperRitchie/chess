@@ -15,26 +15,39 @@ permissions:
 jobs:
   train:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      - name: Generate games
-        run: AZ_SELF_PLAY_GAMES=4 AZ_MCTS_SEARCHES=80 python ml/self_play.py
-      - name: Continue policy-value learning and export model
+      - name: Run AlphaZero regression tests
+        run: python -m unittest discover -s ml/tests -p "test_*.py"
+      - name: Generate neural MCTS self-play games
+        env:
+          AZ_SELF_PLAY_GAMES: "4"
+          AZ_MCTS_SEARCHES: "80"
+          AZ_SELF_PLAY_SEED: ${{ github.run_id }}
+        run: python ml/self_play.py
+      - name: Continue policy-value learning, evaluate, and export model
+        env:
+          TRAIN_SEED: ${{ github.run_id }}
+          AZ_ARENA_GAMES: "2"
+          AZ_ARENA_SEARCHES: "24"
+          AZ_ARENA_MIN_SCORE: "0.5"
         run: python ml/train_safe_export.py
       - name: Commit updated model state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           bash scripts/stage_model_artifacts.sh ml/data/self_play_buffer.json
-          git add public/nn ml/checkpoints ml/data/self_play_buffer.json ml/data/fixed_eval_set.json ml/training_history.json
+          git add public/nn ml/checkpoints ml/data/self_play_buffer.json ml/data/fixed_eval_set_v2.json ml/training_history.json
           if git diff --cached --quiet; then
             echo "No model changes to commit"
             exit 0
