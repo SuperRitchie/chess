@@ -3,6 +3,13 @@ name: Nightly NN training
 on:
   push:
     branches: [ master ]
+    paths-ignore:
+      - "public/nn/**"
+      - "ml/checkpoints/**"
+      - "ml/data/replay_buffer.json"
+      - "ml/data/self_play_buffer.json"
+      - "ml/data/fixed_eval_set*.json"
+      - "ml/training_history.json"
   schedule:
     - cron: "17 9 * * *"
   workflow_dispatch: {}
