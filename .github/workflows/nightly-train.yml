@@ -42,7 +42,7 @@ jobs:
         run: python ml/fetch_lichess.py
       - name: Extract positions
         env:
-          POSITION_SEED: ${{ github.run_id }}
+          POSITION_SEED: ${{ github.run_number }}
         run: python ml/extract_positions.py
       - name: Evaluate uncached positions with Stockfish
         env:
@@ -51,7 +51,7 @@ jobs:
         run: python ml/stockfish_eval.py
       - name: Continue NN learning, evaluate, and export TFJS
         env:
-          TRAIN_SEED: ${{ github.run_id }}
+          TRAIN_SEED: ${{ github.run_number }}
           AZ_ARENA_GAMES: "2"
           AZ_ARENA_SEARCHES: "24"
           AZ_ARENA_MIN_SCORE: "0.5"
