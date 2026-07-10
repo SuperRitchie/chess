@@ -1,71 +1,93 @@
 # ml/stockfish_eval.py
-"""
-Evaluate FENs with Stockfish (centipawns). Requires a local Stockfish binary.
-Set STOCKFISH_PATH env var in GitHub Actions or locally.
-Depth is tuned for speed vs quality.
-"""
-import os, pathlib, subprocess, json, shlex
+"""Evaluate only uncached FENs with one persistent Stockfish process."""
+import json
+import os
+import pathlib
+
+import chess
+import chess.engine
 
 IN_FEN = pathlib.Path("ml/data/positions.fen")
 OUT_JSON = pathlib.Path("ml/data/labels.json")
-
+REPLAY_JSON = pathlib.Path("ml/data/replay_buffer.json")
 STOCKFISH = os.environ.get("STOCKFISH_PATH", "stockfish")
 DEPTH = int(os.environ.get("SF_DEPTH", "12"))
+MATE_SCORE = 100000
 
-def sf_eval(fen):
-    # Use UCI with a single "position fen" + "go depth N" call
-    # Simpler: spawn stockfish per call (OK for small datasets)
-    cmds = [
-        (f"uci\nisready\n"),
-        (f"position fen {fen}\n"),
-        (f"go depth {DEPTH}\n"),
-    ]
-    p = subprocess.Popen([STOCKFISH], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    out = ""
+
+def read_cached_labels() -> dict[str, float]:
+    if not REPLAY_JSON.exists():
+        return {}
     try:
-        for c in cmds:
-            p.stdin.write(c)
-        p.stdin.flush()
-        # read until bestmove
-        for line in p.stdout:
-            out += line
-            if line.startswith("bestmove"):
-                break
-    finally:
-        p.kill()
+        items = json.loads(REPLAY_JSON.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
-    # parse last "info score cp X" or "info score mate M"
-    score_cp = 0
-    last_info = [l for l in out.splitlines() if l.startswith("info ")]
-    for l in reversed(last_info):
-        if " score mate " in l:
-            # mate in N: map to a large value with sign
+    cache = {}
+    for item in items if isinstance(items, list) else []:
+        fen = item.get("fen")
+        if not fen:
+            continue
+        try:
+            cache[fen] = float(item.get("cp", 0.0))
+        except (TypeError, ValueError):
+            continue
+    return cache
+
+
+def read_unique_fens() -> list[str]:
+    seen = set()
+    unique = []
+    with IN_FEN.open(encoding="utf-8") as handle:
+        for line in handle:
+            fen = line.strip()
+            if not fen or fen in seen:
+                continue
             try:
-                m = int(l.split(" score mate ")[1].split()[0])
-                score_cp = 100000 if m > 0 else -100000
-                break
-            except: pass
-        if " score cp " in l:
-            try:
-                cp = int(l.split(" score cp ")[1].split()[0])
-                score_cp = cp
-                break
-            except: pass
-    return score_cp
+                chess.Board(fen)
+            except ValueError as exc:
+                print(f"[stockfish] skipped malformed FEN: {exc}")
+                continue
+            seen.add(fen)
+            unique.append(fen)
+    return unique
+
+
+def analyse_position(engine: chess.engine.SimpleEngine, fen: str) -> float:
+    board = chess.Board(fen)
+    info = engine.analyse(board, chess.engine.Limit(depth=DEPTH))
+    score = info["score"].pov(board.turn).score(mate_score=MATE_SCORE)
+    return float(score if score is not None else 0.0)
+
 
 def main():
-    data = []
-    with IN_FEN.open() as f:
-        fens = [line.strip() for line in f if line.strip()]
-    for i, fen in enumerate(fens):
-        sc = sf_eval(fen)
-        data.append({"fen": fen, "cp": sc})
-        if (i+1) % 200 == 0:
-            print(f"eval {i+1}/{len(fens)}")
+    fens = read_unique_fens()
+    cache = read_cached_labels()
+    missing = [fen for fen in fens if fen not in cache]
+    print(f"[stockfish] positions {len(fens)}, cache hits {len(fens) - len(missing)}, new {len(missing)}")
+
+    if missing:
+        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
+        try:
+            for index, fen in enumerate(missing, start=1):
+                try:
+                    cache[fen] = analyse_position(engine, fen)
+                except (chess.engine.EngineError, chess.engine.EngineTerminatedError, ValueError) as exc:
+                    print(f"[stockfish] failed position {index}/{len(missing)}: {exc}")
+                    continue
+                if index % 200 == 0:
+                    print(f"[stockfish] evaluated {index}/{len(missing)} new positions")
+        finally:
+            engine.quit()
+
+    data = [{"fen": fen, "cp": cache[fen]} for fen in fens if fen in cache]
+    if not data:
+        raise RuntimeError("Stockfish evaluation produced no labels")
 
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-    OUT_JSON.write_text(json.dumps(data), encoding="utf-8")
-    print("wrote", OUT_JSON)
+    OUT_JSON.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+    print(f"[stockfish] wrote {len(data)} labels to {OUT_JSON}")
+
 
 if __name__ == "__main__":
     main()
