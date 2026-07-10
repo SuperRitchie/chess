@@ -17,6 +17,16 @@ function terminalValue(pieces, color, enPassantTarget) {
   return isKingInCheck(pieces, color) ? -1 : 0;
 }
 
+function uniformPrediction(pieces, color, enPassantTarget) {
+  const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
+  const probability = 1 / Math.max(1, legalMoves.length);
+  return {
+    value: 0,
+    legalMoves,
+    priors: new Map(legalMoves.map((move) => [moveKey(move), probability])),
+  };
+}
+
 class Node {
   constructor(parent, pieces, toMove, enPassantTarget, move = null, prior = 0) {
     this.parent = parent;
@@ -40,7 +50,6 @@ class Node {
     const parentVisits = Math.max(1, this.visitCount);
 
     for (const child of this.children) {
-      // Values are stored from each node's side-to-move perspective.
       const q = child.visitCount === 0 ? 0 : -child.meanValue;
       const u = cpuct * child.prior * Math.sqrt(parentVisits) / (1 + child.visitCount);
       const score = q + u;
@@ -92,13 +101,24 @@ async function evaluateAndExpand(node) {
   const terminal = terminalValue(node.pieces, node.toMove, node.enPassantTarget);
   if (terminal !== null) return terminal;
 
-  const { value, priors, legalMoves } = await predictPolicyValueForMoves(
+  let prediction;
+  try {
+    prediction = await predictPolicyValueForMoves(
+      node.pieces,
+      node.toMove,
+      node.enPassantTarget,
+    );
+  } catch (error) {
+    console.warn('Neural MCTS inference failed; using uniform priors.', error);
+  }
+
+  const { value, priors, legalMoves } = prediction || uniformPrediction(
     node.pieces,
     node.toMove,
     node.enPassantTarget,
   );
   node.expand(legalMoves, priors);
-  return value;
+  return Number.isFinite(value) ? value : 0;
 }
 
 export async function pickMCTSMove(
