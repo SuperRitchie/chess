@@ -38,3 +38,19 @@ jobs:
         run: npm test -- --watchAll=false
       - name: Build production site
         run: npm run build
+
+  patch:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Generate unified patch
+        run: git diff --binary "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > chess-alphazero-correctness.patch
+      - name: Upload patch
+        uses: actions/upload-artifact@v4
+        with:
+          name: chess-alphazero-correctness-patch
+          path: chess-alphazero-correctness.patch
+          if-no-files-found: error
