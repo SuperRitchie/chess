@@ -25,11 +25,13 @@ DIRICHLET_ALPHA = float(os.environ.get("AZ_DIRICHLET_ALPHA", "0.3"))
 DIRICHLET_EPSILON = float(os.environ.get("AZ_DIRICHLET_EPSILON", "0.25"))
 TEMP_MOVES = int(os.environ.get("AZ_TEMP_MOVES", "20"))
 TEMPERATURE = float(os.environ.get("AZ_TEMPERATURE", "1.0"))
-SEED = int(os.environ.get("AZ_SELF_PLAY_SEED", "42"))
+SEED = int(os.environ.get("AZ_SELF_PLAY_SEED", "42")) % (2**32 - 1)
 
-random.seed(SEED)
-np.random.seed(SEED)
-tf.keras.utils.set_random_seed(SEED)
+
+def seed_everything(seed=SEED):
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.keras.utils.set_random_seed(seed)
 
 
 def softmax(values):
@@ -135,7 +137,6 @@ class Node:
         best_child = None
         parent_visits = max(1, self.visit_count)
         for child in self.children.values():
-            # Child values are from the child's side-to-move perspective.
             q_value = 0.0 if child.visit_count == 0 else -child.value
             exploration = CPUCT * child.prior * math.sqrt(parent_visits) / (1 + child.visit_count)
             score = q_value + exploration
@@ -259,7 +260,6 @@ def play_game(model, game_index):
 
 
 def play_arena_game(candidate, baseline, candidate_is_white, searches=24, max_plies=160, opening=None):
-    """Play one deterministic candidate-vs-baseline game and score the candidate."""
     board = chess.Board()
     for uci in opening or []:
         move = chess.Move.from_uci(uci)
@@ -306,6 +306,7 @@ def arena_score(candidate, baseline, games=2, searches=24, max_plies=160):
 
 
 def main():
+    seed_everything()
     model = load_model_or_none()
     existing = read_json_list(SELF_PLAY_BUFFER)
     new_samples = []
