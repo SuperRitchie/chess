@@ -40,7 +40,7 @@ jobs:
           npm test -- --watchAll=false 2>&1 | tee browser-test.log
       - name: Upload browser test diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-test-log
           path: browser-test.log
@@ -58,7 +58,7 @@ jobs:
       - name: Generate unified patch
         run: git diff --binary "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > chess-alphazero-correctness.patch
       - name: Upload patch
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chess-alphazero-correctness-patch
           path: chess-alphazero-correctness.patch
