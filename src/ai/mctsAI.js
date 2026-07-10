@@ -1,151 +1,140 @@
-import { listLegalMoves, makeMove, isKingInCheck, hasAnyLegalMove } from '../rules/chessRules';
+import { makeMove, isKingInCheck, listLegalMoves } from '../rules/chessRules';
+import { moveKey, predictPolicyValueForMoves } from './nnAI';
 
-const UCT_C = Math.sqrt(2);
+const DEFAULT_CPUCT = 1.5;
 
-function clone(obj) {
-  return JSON.parse(JSON.stringify(obj));
+function clonePieces(pieces) {
+  return JSON.parse(JSON.stringify(pieces));
 }
 
-function sideEnemy(color) {
+function opponent(color) {
   return color === 'white' ? 'black' : 'white';
 }
 
-function isTerminal(pieces, color, enPassantTarget) {
-  const inCheck = isKingInCheck(pieces, color);
-  const any = hasAnyLegalMove(pieces, color, enPassantTarget);
-  if (!any) {
-    if (inCheck) return { done: true, result: -1 };
-    return { done: true, result: 0 };
-  }
-  return { done: false, result: 0 };
-}
-
-function evaluateMaterial(pieces) {
-  const value = { pawn: 1, knight: 3, bishop: 3, rook: 5, queen: 9, king: 0 };
-  let score = 0;
-  for (const k in pieces) {
-    const p = pieces[k];
-    const s = value[p.type] ?? 0;
-    score += p.color === 'white' ? s : -s;
-  }
-  return score;
-}
-
-function rollout(pieces, toMove, enPassantTarget, maxPlies = 40) {
-  let color = toMove;
-  let ep = enPassantTarget;
-  let steps = 0;
-  while (steps < maxPlies) {
-    const term = isTerminal(pieces, color, ep);
-    if (term.done) {
-      return { terminal: true, result: term.result };
-    }
-
-    const moves = listLegalMoves(pieces, color, ep);
-    if (moves.length === 0) {
-      return { terminal: true, result: 0 };
-    }
-
-    const m = moves[Math.floor(Math.random() * moves.length)];
-    if (m.needsPromotion && !m.promotionType) m.promotionType = 'queen';
-    const { pieces: next, nextEnPassant } = makeMove(pieces, m.from, m.to, m.promotionType, ep);
-    pieces = next;
-    ep = nextEnPassant;
-    color = sideEnemy(color);
-    steps++;
-  }
-
-  const mat = evaluateMaterial(pieces);
-  return { terminal: false, mat };
+function terminalValue(pieces, color, enPassantTarget) {
+  const moves = listLegalMoves(pieces, color, enPassantTarget);
+  if (moves.length > 0) return null;
+  return isKingInCheck(pieces, color) ? -1 : 0;
 }
 
 class Node {
-  constructor(parent, pieces, toMove, enPassantTarget, move = null, rootColor = 'white') {
+  constructor(parent, pieces, toMove, enPassantTarget, move = null, prior = 0) {
     this.parent = parent;
-    this.children = [];
     this.pieces = pieces;
     this.toMove = toMove;
     this.enPassantTarget = enPassantTarget;
     this.move = move;
-    this.rootColor = rootColor;
-
-    this.untriedMoves = listLegalMoves(pieces, toMove, enPassantTarget);
-    this.N = 0;
-    this.W = 0;
+    this.prior = prior;
+    this.children = [];
+    this.visitCount = 0;
+    this.valueSum = 0;
   }
 
-  uctScore() {
-    if (this.N === 0) return Infinity;
-    const mean = this.W / this.N;
-    const parentN = this.parent ? Math.max(1, this.parent.N) : 1;
-    return mean + UCT_C * Math.sqrt(Math.log(parentN) / this.N);
+  get meanValue() {
+    return this.visitCount === 0 ? 0 : this.valueSum / this.visitCount;
   }
 
-  bestChild() {
-    return this.children.reduce((a, b) => (a.uctScore() > b.uctScore() ? a : b));
+  selectChild(cpuct) {
+    let best = null;
+    let bestScore = -Infinity;
+    const parentVisits = Math.max(1, this.visitCount);
+
+    for (const child of this.children) {
+      // Values are stored from each node's side-to-move perspective.
+      const q = child.visitCount === 0 ? 0 : -child.meanValue;
+      const u = cpuct * child.prior * Math.sqrt(parentVisits) / (1 + child.visitCount);
+      const score = q + u;
+      if (score > bestScore) {
+        bestScore = score;
+        best = child;
+      }
+    }
+    return best;
   }
 
-  expand() {
-    if (this.untriedMoves.length === 0) return this;
-    const m = this.untriedMoves.pop();
-    const promo = m.needsPromotion && !m.promotionType ? 'queen' : m.promotionType;
-    const { pieces: next, nextEnPassant } = makeMove(this.pieces, m.from, m.to, promo, this.enPassantTarget);
-    const child = new Node(this, next, sideEnemy(this.toMove), nextEnPassant, { ...m, promotionType: promo }, this.rootColor);
-    this.children.push(child);
-    return child;
+  expand(legalMoves, priors) {
+    if (this.children.length > 0) return;
+    for (const move of legalMoves) {
+      const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
+      const { pieces: nextPieces, nextEnPassant } = makeMove(
+        this.pieces,
+        move.from,
+        move.to,
+        promotion,
+        this.enPassantTarget,
+      );
+      this.children.push(
+        new Node(
+          this,
+          nextPieces,
+          opponent(this.toMove),
+          nextEnPassant,
+          { ...move, promotionType: promotion },
+          priors.get(moveKey(move)) || 0,
+        ),
+      );
+    }
+  }
+
+  backup(value) {
+    let node = this;
+    let currentValue = value;
+    while (node) {
+      node.visitCount += 1;
+      node.valueSum += currentValue;
+      currentValue = -currentValue;
+      node = node.parent;
+    }
   }
 }
 
-function scoreFromRoot(resultObj, node) {
-  if (resultObj.terminal) {
-    const side = node.toMove;
-    if (resultObj.result === -1) return side === node.rootColor ? 0 : 1;
-    if (resultObj.result === 0) return 0.5;
-    return side === node.rootColor ? 1 : 0;
-  }
+async function evaluateAndExpand(node) {
+  const terminal = terminalValue(node.pieces, node.toMove, node.enPassantTarget);
+  if (terminal !== null) return terminal;
 
-  const mat = resultObj.mat;
-  const favorWhite = 1 / (1 + Math.exp(-0.5 * mat));
-  return node.rootColor === 'white' ? favorWhite : 1 - favorWhite;
+  const { value, priors, legalMoves } = await predictPolicyValueForMoves(
+    node.pieces,
+    node.toMove,
+    node.enPassantTarget,
+  );
+  node.expand(legalMoves, priors);
+  return value;
 }
 
 export async function pickMCTSMove(
   pieces,
   color,
   enPassantTarget,
-  { timeMs = 1200, maxIterations = 2000, rolloutDepth = 40 } = {},
+  { timeMs = 1200, maxIterations = 3000, cpuct = DEFAULT_CPUCT } = {},
 ) {
-  const root = new Node(null, clone(pieces), color, enPassantTarget, null, color);
+  const root = new Node(null, clonePieces(pieces), color, enPassantTarget);
+  const rootValue = await evaluateAndExpand(root);
+  root.visitCount = 1;
+  root.valueSum = rootValue;
+  if (root.children.length === 0) return null;
 
-  const tEnd = Date.now() + timeMs;
-  let iters = 0;
-
-  while (iters < maxIterations && Date.now() < tEnd) {
+  const deadline = Date.now() + Math.max(1, timeMs);
+  let iterations = 0;
+  while (iterations < maxIterations && Date.now() < deadline) {
     let node = root;
-    while (node.untriedMoves.length === 0 && node.children.length > 0) {
-      node = node.bestChild();
+    while (node.children.length > 0) {
+      node = node.selectChild(cpuct);
+      if (!node) break;
     }
+    if (!node) break;
 
-    if (node.untriedMoves.length > 0) {
-      node = node.expand();
-    }
-
-    const simPieces = clone(node.pieces);
-    const simToMove = node.toMove;
-    const simEP = node.enPassantTarget;
-    const result = rollout(simPieces, simToMove, simEP, rolloutDepth);
-
-    let cur = node;
-    const score = scoreFromRoot(result, node);
-    while (cur) {
-      cur.N += 1;
-      cur.W += score;
-      cur = cur.parent;
-    }
-    iters++;
+    const value = await evaluateAndExpand(node);
+    node.backup(value);
+    iterations += 1;
   }
 
-  if (root.children.length === 0) return null;
-  const best = root.children.reduce((a, b) => (a.N > b.N ? a : b));
-  return best.move || null;
+  const best = root.children.reduce((current, child) => {
+    if (!current) return child;
+    if (child.visitCount !== current.visitCount) {
+      return child.visitCount > current.visitCount ? child : current;
+    }
+    return child.meanValue < current.meanValue ? child : current;
+  }, null);
+
+  return best?.move || null;
 }
