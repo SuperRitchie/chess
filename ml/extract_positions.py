@@ -1,8 +1,6 @@
 # ml/extract_positions.py
-"""
-read PGN, sample midgame positions to avoid trivial openings/endings
-outputs FEN lines to ml/data/positions.fen
-"""
+"""Read PGN and sample non-trivial positions into ml/data/positions.fen."""
+import os
 import pathlib
 import random
 
@@ -11,13 +9,14 @@ import chess.pgn
 
 IN_PGN = pathlib.Path("ml/data/games.pgn")
 OUT_FEN = pathlib.Path("ml/data/positions.fen")
-random.seed(42)
+SEED = int(os.environ.get("POSITION_SEED", "42"))
+random.seed(SEED)
 
 
 def replay_to_ply(game, ply):
     board = game.board()
-    for i, node in enumerate(game.mainline()):
-        if i > ply:
+    for index, node in enumerate(game.mainline()):
+        if index > ply:
             break
         if node.move is not None:
             board.push(node.move)
@@ -27,9 +26,9 @@ def replay_to_ply(game, ply):
 def sample_positions(pgn_path, max_games=2000, per_game=15, min_ply=12, max_ply=80):
     count = 0
     skipped = 0
-    with open(pgn_path, "r", encoding="utf-8") as f:
+    with open(pgn_path, "r", encoding="utf-8") as handle:
         while True:
-            game = chess.pgn.read_game(f)
+            game = chess.pgn.read_game(handle)
             if game is None:
                 break
             count += 1
@@ -38,12 +37,9 @@ def sample_positions(pgn_path, max_games=2000, per_game=15, min_ply=12, max_ply=
             if not nodes:
                 continue
 
-            plies = list(range(min(len(nodes), max_ply)))
-            plies = [p for p in plies if p >= min_ply]
+            plies = [ply for ply in range(min(len(nodes), max_ply)) if ply >= min_ply]
             random.shuffle(plies)
-            plies = plies[:per_game]
-
-            for ply in plies:
+            for ply in plies[:per_game]:
                 try:
                     board = replay_to_ply(game, ply)
                     yield board.fen(en_passant="fen")
@@ -55,15 +51,16 @@ def sample_positions(pgn_path, max_games=2000, per_game=15, min_ply=12, max_ply=
             if count >= max_games:
                 break
 
-    if skipped:
-        print(f"[extract] skipped {skipped} malformed games or positions")
+    print(f"[extract] processed {count} games with seed {SEED}; skipped {skipped}")
 
 
 def main():
     OUT_FEN.parent.mkdir(parents=True, exist_ok=True)
-    with OUT_FEN.open("w") as out:
-        for fen in sample_positions(IN_PGN):
-            out.write(fen + "\n")
+    positions = list(dict.fromkeys(sample_positions(IN_PGN)))
+    if not positions:
+        raise RuntimeError("no positions were extracted from the downloaded PGN")
+    OUT_FEN.write_text("\n".join(positions) + "\n", encoding="utf-8")
+    print(f"[extract] wrote {len(positions)} unique positions to {OUT_FEN}")
 
 
 if __name__ == "__main__":
