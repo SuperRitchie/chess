@@ -57,13 +57,13 @@ export function isSquareAttacked(pieces, x, y, byColor) {
           if ((adx === 1 && ady === 2) || (adx === 2 && ady === 1)) return true;
           break;
         case 'bishop':
-          if (Math.abs(dx) === Math.abs(dy) && pathClear(pieces, sx, sy, x, y)) return true;
+          if (adx === ady && pathClear(pieces, sx, sy, x, y)) return true;
           break;
         case 'rook':
           if ((sx === x || sy === y) && pathClear(pieces, sx, sy, x, y)) return true;
           break;
         case 'queen':
-          if (((sx === x || sy === y) || Math.abs(dx) === Math.abs(dy)) && pathClear(pieces, sx, sy, x, y)) return true;
+          if (((sx === x || sy === y) || adx === ady) && pathClear(pieces, sx, sy, x, y)) return true;
           break;
         case 'king':
           if (adx <= 1 && ady <= 1) return true;
@@ -79,19 +79,29 @@ export function isSquareAttacked(pieces, x, y, byColor) {
 export function isKingInCheck(pieces, color) {
   const king = findKing(pieces, color);
   if (!king) return false;
-  const enemy = color === 'white' ? 'black' : 'white';
-  return isSquareAttacked(pieces, king.x, king.y, enemy);
+  return isSquareAttacked(pieces, king.x, king.y, color === 'white' ? 'black' : 'white');
+}
+
+function moveKingForAttackTest(pieces, row, fromY, toY, mover, rookMove = null) {
+  const next = { ...pieces };
+  delete next[key(row, fromY)];
+  next[key(row, toY)] = { ...mover, hasMoved: true };
+  if (rookMove) {
+    const rook = next[key(row, rookMove.from)];
+    delete next[key(row, rookMove.from)];
+    if (rook) next[key(row, rookMove.to)] = { ...rook, hasMoved: true };
+  }
+  return next;
 }
 
 function canCastle(pieces, x1, y1, x2, y2, mover) {
   if (mover.type !== 'king') return false;
-  if (x1 !== x2 || Math.abs(y2 - y1) !== 2) return false;
-  if (mover.hasMoved) return false;
+  if (x1 !== x2 || Math.abs(y2 - y1) !== 2 || mover.hasMoved) return false;
 
   const color = mover.color;
   const enemy = color === 'white' ? 'black' : 'white';
   const homeRow = color === 'white' ? 7 : 0;
-  if (x1 !== homeRow) return false;
+  if (x1 !== homeRow || y1 !== 4) return false;
 
   const kingSide = y2 > y1;
   const rookY = kingSide ? 7 : 0;
@@ -104,41 +114,44 @@ function canCastle(pieces, x1, y1, x2, y2, mover) {
   }
 
   if (isKingInCheck(pieces, color)) return false;
-  const pass1Y = y1 + step;
-  const destY = y1 + 2 * step;
-  if (isSquareAttacked(pieces, homeRow, pass1Y, enemy)) return false;
-  if (isSquareAttacked(pieces, homeRow, destY, enemy)) return false;
+
+  const passY = y1 + step;
+  const passPieces = moveKingForAttackTest(pieces, homeRow, y1, passY, mover);
+  if (isSquareAttacked(passPieces, homeRow, passY, enemy)) return false;
+
+  const rookToY = kingSide ? 5 : 3;
+  const finalPieces = moveKingForAttackTest(
+    pieces,
+    homeRow,
+    y1,
+    y2,
+    mover,
+    { from: rookY, to: rookToY },
+  );
+  if (isSquareAttacked(finalPieces, homeRow, y2, enemy)) return false;
 
   return true;
 }
 
 function isEnPassant(pieces, from, to, enPassantTarget) {
   const mover = getPiece(pieces, from.x, from.y);
-  if (!mover || mover.type !== 'pawn') return false;
-  if (!enPassantTarget) return false;
+  if (!mover || mover.type !== 'pawn' || !enPassantTarget) return false;
 
   const dx = to.x - from.x;
   const dy = to.y - from.y;
-  const destPiece = getPiece(pieces, to.x, to.y);
-  if (destPiece) return false;
+  if (getPiece(pieces, to.x, to.y)) return false;
   const dir = mover.color === 'white' ? -1 : 1;
-
   return dx === dir && Math.abs(dy) === 1 && enPassantTarget.x === to.x && enPassantTarget.y === to.y;
 }
 
 function isPseudoLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget = null) {
   const { x: x1, y: y1 } = from;
   const { x: x2, y: y2 } = to;
-
-  if (!inBounds(x1, y1) || !inBounds(x2, y2)) return false;
-  if (x1 === x2 && y1 === y2) return false;
+  if (!inBounds(x1, y1) || !inBounds(x2, y2) || (x1 === x2 && y1 === y2)) return false;
 
   const mover = getPiece(pieces, x1, y1);
   if (!mover) return false;
-
-  if ((isWhiteTurn && mover.color !== 'white') || (!isWhiteTurn && mover.color !== 'black')) {
-    return false;
-  }
+  if ((isWhiteTurn && mover.color !== 'white') || (!isWhiteTurn && mover.color !== 'black')) return false;
 
   const dest = getPiece(pieces, x2, y2);
   if (sameColor(mover, dest)) return false;
@@ -152,17 +165,10 @@ function isPseudoLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget = null
     case 'pawn': {
       const dir = mover.color === 'white' ? -1 : 1;
       const startRow = mover.color === 'white' ? 6 : 1;
-
       if (dx === dir && dy === 0 && !dest) return true;
-
-      if (dx === 2 * dir && dy === 0 && x1 === startRow && !dest && !getPiece(pieces, x1 + dir, y1)) {
-        return true;
-      }
-
-      if (dx === dir && Math.abs(dy) === 1 && dest && dest.color !== mover.color) return true;
-      if (isEnPassant(pieces, from, to, enPassantTarget)) return true;
-
-      return false;
+      if (dx === 2 * dir && dy === 0 && x1 === startRow && !dest && !getPiece(pieces, x1 + dir, y1)) return true;
+      if (dx === dir && ady === 1 && dest && dest.color !== mover.color) return true;
+      return isEnPassant(pieces, from, to, enPassantTarget);
     }
     case 'rook':
       return rookLike(pieces, x1, y1, x2, y2);
@@ -172,10 +178,9 @@ function isPseudoLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget = null
       return rookLike(pieces, x1, y1, x2, y2) || bishopLike(pieces, x1, y1, x2, y2);
     case 'knight':
       return (adx === 1 && ady === 2) || (adx === 2 && ady === 1);
-    case 'king': {
+    case 'king':
       if (adx <= 1 && ady <= 1) return true;
       return canCastle(pieces, x1, y1, x2, y2, mover);
-    }
     default:
       return false;
   }
@@ -204,10 +209,8 @@ export function makeMove(pieces, from, to, promotionType = null, enPassantTarget
     }
   }
 
-  const didEnPassant = isEnPassant(pieces, from, to, enPassantTarget);
-  if (didEnPassant) {
-    const capSquare = key(x1, y2);
-    delete next[capSquare];
+  if (isEnPassant(pieces, from, to, enPassantTarget)) {
+    delete next[key(x1, y2)];
   }
 
   next[key(x2, y2)] = movingPiece;
@@ -216,8 +219,6 @@ export function makeMove(pieces, from, to, promotionType = null, enPassantTarget
   if (movingPiece.type === 'pawn' && Math.abs(x2 - x1) === 2) {
     const dir = movingPiece.color === 'white' ? -1 : 1;
     nextEnPassant = { x: x1 + dir, y: y1 };
-  } else {
-    nextEnPassant = null;
   }
 
   if (movingPiece.type === 'pawn') {
@@ -232,32 +233,15 @@ export function makeMove(pieces, from, to, promotionType = null, enPassantTarget
 
 export function isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget = null) {
   if (!isPseudoLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) return false;
-
   const mover = getPiece(pieces, from.x, from.y);
   const color = mover?.color;
   if (!color) return false;
-
   const { pieces: after } = makeMove(pieces, from, to, null, enPassantTarget);
   return !isKingInCheck(after, color);
 }
 
 export function hasAnyLegalMove(pieces, color, enPassantTarget = null) {
-  const isWhiteTurn = color === 'white';
-  for (let x1 = 0; x1 < 8; x1++) {
-    for (let y1 = 0; y1 < 8; y1++) {
-      const p = getPiece(pieces, x1, y1);
-      if (!p || p.color !== color) continue;
-
-      for (let x2 = 0; x2 < 8; x2++) {
-        for (let y2 = 0; y2 < 8; y2++) {
-          if (isLegalMove(pieces, { x: x1, y: y1 }, { x: x2, y: y2 }, isWhiteTurn, enPassantTarget)) {
-            return true;
-          }
-        }
-      }
-    }
-  }
-  return false;
+  return listLegalMoves(pieces, color, enPassantTarget).length > 0;
 }
 
 export function listLegalMoves(pieces, color, enPassantTarget = null) {
@@ -265,19 +249,23 @@ export function listLegalMoves(pieces, color, enPassantTarget = null) {
   const moves = [];
   for (let x1 = 0; x1 < 8; x1++) {
     for (let y1 = 0; y1 < 8; y1++) {
-      const p = getPiece(pieces, x1, y1);
-      if (!p || p.color !== color) continue;
+      const piece = getPiece(pieces, x1, y1);
+      if (!piece || piece.color !== color) continue;
       for (let x2 = 0; x2 < 8; x2++) {
         for (let y2 = 0; y2 < 8; y2++) {
-          if (isLegalMove(pieces, { x: x1, y: y1 }, { x: x2, y: y2 }, isWhiteTurn, enPassantTarget)) {
-            const target = getPiece(pieces, x2, y2);
-            const needsPromotion = p.type === 'pawn' && (x2 === 0 || x2 === 7);
-            moves.push({
-              from: { x: x1, y: y1 },
-              to: { x: x2, y: y2 },
-              capture: !!target,
-              needsPromotion,
-            });
+          const from = { x: x1, y: y1 };
+          const to = { x: x2, y: y2 };
+          if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) continue;
+
+          const target = getPiece(pieces, x2, y2);
+          const needsPromotion = piece.type === 'pawn' && (x2 === 0 || x2 === 7);
+          const baseMove = { from, to, capture: !!target, needsPromotion };
+          if (needsPromotion) {
+            for (const promotionType of ['queen', 'rook', 'bishop', 'knight']) {
+              moves.push({ ...baseMove, promotionType });
+            }
+          } else {
+            moves.push(baseMove);
           }
         }
       }
