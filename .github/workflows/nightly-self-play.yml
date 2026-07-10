@@ -33,11 +33,11 @@ jobs:
         env:
           AZ_SELF_PLAY_GAMES: "4"
           AZ_MCTS_SEARCHES: "80"
-          AZ_SELF_PLAY_SEED: ${{ github.run_id }}
+          AZ_SELF_PLAY_SEED: ${{ github.run_number }}
         run: python ml/self_play.py
       - name: Continue policy-value learning, evaluate, and export model
         env:
-          TRAIN_SEED: ${{ github.run_id }}
+          TRAIN_SEED: ${{ github.run_number }}
           AZ_ARENA_GAMES: "2"
           AZ_ARENA_SEARCHES: "24"
           AZ_ARENA_MIN_SCORE: "0.5"
