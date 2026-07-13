@@ -59,8 +59,10 @@ jobs:
       - name: Continue NN learning, evaluate, and export TFJS
         env:
           TRAIN_SEED: ${{ github.run_number }}
-          AZ_ARENA_GAMES: "2"
-          AZ_ARENA_SEARCHES: "24"
+          AZ_MAX_SELF_PLAY_TRAIN: "12000"
+          AZ_MAX_STOCKFISH_TRAIN: "12000"
+          AZ_ARENA_GAMES: "8"
+          AZ_ARENA_SEARCHES: "48"
           AZ_ARENA_MIN_SCORE: "0.5"
         run: python ml/train_safe_export.py
       - name: Commit updated brain and browser model

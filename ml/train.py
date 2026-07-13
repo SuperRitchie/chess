@@ -35,8 +35,8 @@ CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
 BOARD_H, BOARD_W = 8, 8
 FLAT_SIZE = BOARD_H * BOARD_W * PLANES
 MAX_REPLAY_ITEMS = int(os.environ.get("MAX_REPLAY_ITEMS", "50000"))
-MAX_SELF_PLAY_TRAIN = int(os.environ.get("AZ_MAX_SELF_PLAY_TRAIN", "4000"))
-MAX_STOCKFISH_TRAIN = int(os.environ.get("AZ_MAX_STOCKFISH_TRAIN", "8000"))
+MAX_SELF_PLAY_TRAIN = int(os.environ.get("AZ_MAX_SELF_PLAY_TRAIN", "12000"))
+MAX_STOCKFISH_TRAIN = int(os.environ.get("AZ_MAX_STOCKFISH_TRAIN", "12000"))
 COLD_START_EPOCHS = int(os.environ.get("COLD_START_EPOCHS", "6"))
 CONTINUE_EPOCHS = int(os.environ.get("CONTINUE_EPOCHS", "3"))
 COLD_START_LR = float(os.environ.get("COLD_START_LR", "1e-3"))

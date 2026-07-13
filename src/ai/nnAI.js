@@ -55,8 +55,7 @@ function canCastleFromPieces(pieces, color, kingSide) {
   );
 }
 
-function featuresFromBoard(pieces, isWhiteTurn, enPassantTarget, planeCount = 18) {
-  const buf = tf.buffer([1, 8, 8, planeCount], 'float32');
+function writeBoardFeatures(buf, batchIndex, pieces, isWhiteTurn, enPassantTarget, planeCount) {
   const typeToIdx = { pawn: 0, knight: 1, bishop: 2, rook: 3, queen: 4, king: 5 };
 
   for (let y = 0; y < 8; y++) {
@@ -64,9 +63,9 @@ function featuresFromBoard(pieces, isWhiteTurn, enPassantTarget, planeCount = 18
       const piece = getPiece(pieces, y, x);
       if (piece) {
         const base = piece.color === 'white' ? 0 : 6;
-        buf.set(1, 0, y, x, base + typeToIdx[piece.type]);
+        buf.set(1, batchIndex, y, x, base + typeToIdx[piece.type]);
       }
-      buf.set(isWhiteTurn ? 1 : 0, 0, y, x, 12);
+      buf.set(isWhiteTurn ? 1 : 0, batchIndex, y, x, 12);
     }
   }
 
@@ -80,31 +79,58 @@ function featuresFromBoard(pieces, isWhiteTurn, enPassantTarget, planeCount = 18
     rights.forEach((available, offset) => {
       if (!available) return;
       for (let y = 0; y < 8; y++) {
-        for (let x = 0; x < 8; x++) buf.set(1, 0, y, x, 13 + offset);
+        for (let x = 0; x < 8; x++) buf.set(1, batchIndex, y, x, 13 + offset);
       }
     });
     if (enPassantTarget) {
-      buf.set(1, 0, enPassantTarget.x, enPassantTarget.y, 17);
+      buf.set(1, batchIndex, enPassantTarget.x, enPassantTarget.y, 17);
     }
   }
+}
+
+function featuresFromPositions(positions, planeCount = 18) {
+  const buf = tf.buffer([positions.length, 8, 8, planeCount], 'float32');
+  positions.forEach((position, index) => {
+    writeBoardFeatures(
+      buf,
+      index,
+      position.pieces,
+      position.color === 'white',
+      position.enPassantTarget,
+      planeCount,
+    );
+  });
 
   return buf.toTensor();
 }
 
-async function rawPrediction(model, pieces, isWhiteTurn, enPassantTarget) {
+async function rawPredictions(model, positions) {
   const planeCount = Number(model.inputs?.[0]?.shape?.[3]) || 18;
-  const x = featuresFromBoard(pieces, isWhiteTurn, enPassantTarget, planeCount);
+  const x = featuresFromPositions(positions, planeCount);
   const prediction = model.predict(x);
   const outputs = Array.isArray(prediction) ? prediction : [null, prediction];
   const [policyTensor, valueTensor] = outputs.length === 2 ? outputs : [null, outputs[0]];
 
   try {
-    const policyData = policyTensor ? Array.from(await policyTensor.data()) : null;
+    const policyData = policyTensor ? await policyTensor.data() : null;
     const valueData = await valueTensor.data();
-    return { policyData, value: valueData[0] };
+    const policySize = policyTensor ? Number(policyTensor.shape[policyTensor.shape.length - 1]) : 0;
+    return positions.map((_, index) => ({
+      policyData: policyData?.subarray(index * policySize, (index + 1) * policySize) || null,
+      value: valueData[index],
+    }));
   } finally {
     tf.dispose([x, ...outputs.filter(Boolean)]);
   }
+}
+
+async function rawPrediction(model, pieces, isWhiteTurn, enPassantTarget) {
+  const predictions = await rawPredictions(model, [{
+    pieces,
+    color: isWhiteTurn ? 'white' : 'black',
+    enPassantTarget,
+  }]);
+  return predictions[0];
 }
 
 async function evalPosition(model, pieces, isWhiteTurn, enPassantTarget) {
@@ -119,26 +145,53 @@ function uniformPrediction(legalMoves) {
   return { value: 0, priors, legalMoves };
 }
 
-export async function predictPolicyValueForMoves(pieces, color, enPassantTarget) {
-  const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
-  if (legalMoves.length === 0) {
-    return { value: isKingInCheck(pieces, color) ? -1 : 0, priors: new Map(), legalMoves };
-  }
+function predictionForLegalMoves(legalMoves, raw) {
+  if (!raw.policyData) return { ...uniformPrediction(legalMoves), value: raw.value };
+  const logits = legalMoves.map((move) => raw.policyData[moveToPolicyIndex(move, raw.policyData.length)] ?? -1000000);
+  const probabilities = stableSoftmax(logits);
+  const priors = new Map();
+  legalMoves.forEach((move, index) => priors.set(moveKey(move), probabilities[index]));
+  return { value: raw.value, priors, legalMoves };
+}
+
+export async function predictPolicyValueBatchForPositions(positions) {
+  const results = new Array(positions.length);
+  const pending = [];
+
+  positions.forEach((position, index) => {
+    const legalMoves = listLegalMoves(position.pieces, position.color, position.enPassantTarget);
+    if (legalMoves.length === 0) {
+      results[index] = {
+        value: isKingInCheck(position.pieces, position.color) ? -1 : 0,
+        priors: new Map(),
+        legalMoves,
+      };
+    } else {
+      pending.push({ ...position, index, legalMoves });
+    }
+  });
+
+  if (pending.length === 0) return results;
 
   try {
     const model = await loadModel();
-    const { policyData, value } = await rawPrediction(model, pieces, color === 'white', enPassantTarget);
-    if (!policyData) return { ...uniformPrediction(legalMoves), value };
-
-    const logits = legalMoves.map((move) => policyData[moveToPolicyIndex(move, policyData.length)] ?? -1000000);
-    const probabilities = stableSoftmax(logits);
-    const priors = new Map();
-    legalMoves.forEach((move, index) => priors.set(moveKey(move), probabilities[index]));
-    return { value, priors, legalMoves };
+    const predictions = await rawPredictions(model, pending);
+    pending.forEach((position, pendingIndex) => {
+      results[position.index] = predictionForLegalMoves(position.legalMoves, predictions[pendingIndex]);
+    });
   } catch (error) {
     console.warn('Neural model unavailable; using uniform policy/value fallback.', error);
-    return uniformPrediction(legalMoves);
+    pending.forEach((position) => {
+      results[position.index] = uniformPrediction(position.legalMoves);
+    });
   }
+
+  return results;
+}
+
+export async function predictPolicyValueForMoves(pieces, color, enPassantTarget) {
+  const [prediction] = await predictPolicyValueBatchForPositions([{ pieces, color, enPassantTarget }]);
+  return prediction;
 }
 
 export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {

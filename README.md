@@ -6,7 +6,7 @@ Playable at [ritchiek.tech/chess](https://superritchie.github.io/chess/).
 
 - **Random** chooses uniformly from legal moves.
 - **NN** uses a shallow negamax search with the neural value head at leaf positions.
-- **MCTS** is AlphaZero-style neural PUCT: policy priors guide selection and the neural value replaces random rollouts.
+- **Neural MCTS** is AlphaZero-style PUCT with batched leaf evaluation, so the browser explores more positions inside a two-second move budget.
 
 The policy/value network receives 18 feature planes: 12 piece planes, side to move, four castling-right planes, and the en-passant target. Its policy space represents normal moves plus queen, rook, bishop, and knight promotions separately.
 
@@ -15,7 +15,9 @@ The policy/value network receives 18 feature planes: 12 piece planes, side to mo
 Two serialized GitHub Actions workflows share the same model-training concurrency group:
 
 1. **Nightly NN training** downloads recent Lichess games, samples positions, evaluates uncached positions with Stockfish, and trains the value head alongside the existing self-play policy data.
-2. **Nightly policy-value self training** generates games with neural MCTS and trains both the policy and value heads from `(state, MCTS visit distribution, final outcome)` samples.
+2. **Nightly policy-value self training** generates 16 games in parallel batches, retains up to 20,000 replay samples, and trains both heads from `(state, MCTS visit distribution, final outcome)` samples.
+
+Each accepted run can train on up to 12,000 self-play positions and 12,000 Stockfish positions. Batched inference lets the workflow collect substantially more games while keeping the run bounded.
 
 A candidate checkpoint replaces the current model only when:
 
@@ -40,7 +42,11 @@ npm run build
 The workflows provide defaults, and the main controls can also be overridden locally:
 
 - `AZ_SELF_PLAY_GAMES`
+- `AZ_SELF_PLAY_BATCH_SIZE`
 - `AZ_MCTS_SEARCHES`
+- `AZ_MAX_SELF_PLAY_SAMPLES`
+- `AZ_MAX_SELF_PLAY_TRAIN`
+- `AZ_MAX_STOCKFISH_TRAIN`
 - `AZ_SELF_PLAY_SEED`
 - `AZ_ARENA_GAMES`
 - `AZ_ARENA_SEARCHES`

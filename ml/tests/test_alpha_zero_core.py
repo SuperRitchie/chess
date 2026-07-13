@@ -76,6 +76,30 @@ class SearchAndModelTests(unittest.TestCase):
             (False, "previous_validation_failed"),
         )
 
+    def test_batched_search_shares_model_calls_across_games(self):
+        class CountingModel:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, features_batch, training=False):
+                self.calls += 1
+                batch_size = len(features_batch)
+                return [
+                    np.zeros((batch_size, policy_map.POLICY_SIZE), dtype=np.float32),
+                    np.zeros((batch_size, 1), dtype=np.float32),
+                ]
+
+        model = CountingModel()
+        boards = [chess.Board(), chess.Board()]
+        policies = self_play.run_search_batch(model, boards, searches=3, add_noise=False)
+
+        self.assertEqual(model.calls, 4)
+        self.assertEqual(len(policies), 2)
+        for board, policy in zip(boards, policies):
+            legal_indices = {policy_map.move_to_index(move) for move in board.legal_moves}
+            self.assertEqual(set(policy), legal_indices)
+            self.assertAlmostEqual(sum(policy.values()), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()
