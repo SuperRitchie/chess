@@ -2,7 +2,7 @@
   "name": "chess",
   "version": "0.1.0",
   "private": true,
-  "homepage": "http://SuperRitchie.github.io/chess",
+  "homepage": "https://SuperRitchie.github.io/chess",
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@testing-library/jest-dom": "^6.0.0",

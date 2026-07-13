@@ -17,9 +17,12 @@ ml/
 1. fetch recent Lichess games
 2. sample board positions
 3. label positions with Stockfish
-4. merge new labels into `ml/data/replay_buffer.json`
-5. load `ml/checkpoints/chess_eval.keras` when it exists
-6. continue training from that saved brain
-7. save the updated checkpoint, browser model, replay buffer, and metrics
+4. generate self-play games concurrently and batch neural leaf evaluation across active games
+5. retain up to 20,000 self-play samples and 50,000 Stockfish labels
+6. train on up to 12,000 positions from each replay source per run
+7. load `ml/checkpoints/chess_eval.keras` when it exists
+8. continue training from that saved brain
+9. compare the candidate over eight paired-color arena games
+10. save the accepted checkpoint, browser model, replay buffer, and metrics
 
 The first run starts from scratch. Later runs continue from the saved checkpoint instead of replacing the model with a brand-new one.

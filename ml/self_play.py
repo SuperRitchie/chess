@@ -17,9 +17,10 @@ CHECKPOINT_MODEL = pathlib.Path("ml/checkpoints/chess_eval.keras")
 SELF_PLAY_BUFFER = pathlib.Path("ml/data/self_play_buffer.json")
 
 SELF_PLAY_GAMES = int(os.environ.get("AZ_SELF_PLAY_GAMES", "4"))
+SELF_PLAY_BATCH_SIZE = int(os.environ.get("AZ_SELF_PLAY_BATCH_SIZE", "4"))
 MCTS_SEARCHES = int(os.environ.get("AZ_MCTS_SEARCHES", "80"))
 MAX_PLIES = int(os.environ.get("AZ_MAX_PLIES", "180"))
-MAX_BUFFER = int(os.environ.get("AZ_MAX_SELF_PLAY_SAMPLES", "8000"))
+MAX_BUFFER = int(os.environ.get("AZ_MAX_SELF_PLAY_SAMPLES", "20000"))
 CPUCT = float(os.environ.get("AZ_CPUCT", "1.5"))
 DIRICHLET_ALPHA = float(os.environ.get("AZ_DIRICHLET_ALPHA", "0.3"))
 DIRICHLET_EPSILON = float(os.environ.get("AZ_DIRICHLET_EPSILON", "0.25"))
@@ -94,28 +95,47 @@ def terminal_value(board):
     return 1.0 if outcome.winner == board.turn else -1.0
 
 
-def model_policy_value(model, board):
-    legal_moves = list(board.legal_moves)
-    if not legal_moves:
-        return {}, terminal_value(board) or 0.0
+def model_policy_value_batch(model, boards):
+    if not boards:
+        return []
 
+    legal_moves_by_board = [list(board.legal_moves) for board in boards]
     if model is None:
-        probability = 1.0 / len(legal_moves)
-        return {move_to_index(move): probability for move in legal_moves}, 0.0
+        results = []
+        for board, legal_moves in zip(boards, legal_moves_by_board):
+            if not legal_moves:
+                results.append(({}, terminal_value(board) or 0.0))
+                continue
+            probability = 1.0 / len(legal_moves)
+            results.append(({move_to_index(move): probability for move in legal_moves}, 0.0))
+        return results
 
-    features = board_to_features(board.fen(en_passant="fen")).reshape(1, 8, 8, PLANES).astype(np.float32)
-    prediction = model.predict(features, verbose=0)
+    features = np.stack(
+        [board_to_features(board.fen(en_passant="fen")).reshape(8, 8, PLANES) for board in boards]
+    ).astype(np.float32)
+    prediction = model(features, training=False)
     if not isinstance(prediction, (list, tuple)) or len(prediction) != 2:
-        probability = 1.0 / len(legal_moves)
-        return {move_to_index(move): probability for move in legal_moves}, 0.0
+        return model_policy_value_batch(None, boards)
 
-    policy_logits, value = prediction
-    logits = np.asarray(policy_logits[0], dtype=np.float32)
-    legal_indices = [move_to_index(move) for move in legal_moves]
-    legal_logits = np.array([logits[index] for index in legal_indices], dtype=np.float32)
-    legal_probabilities = softmax(legal_logits)
-    priors = {index: float(probability) for index, probability in zip(legal_indices, legal_probabilities)}
-    return priors, float(value[0][0])
+    policy_logits, values = (np.asarray(output, dtype=np.float32) for output in prediction)
+    results = []
+    for board_index, (board, legal_moves) in enumerate(zip(boards, legal_moves_by_board)):
+        if not legal_moves:
+            results.append(({}, terminal_value(board) or 0.0))
+            continue
+        legal_indices = [move_to_index(move) for move in legal_moves]
+        legal_logits = policy_logits[board_index, legal_indices]
+        legal_probabilities = softmax(legal_logits)
+        priors = {
+            index: float(probability)
+            for index, probability in zip(legal_indices, legal_probabilities)
+        }
+        results.append((priors, float(values[board_index][0])))
+    return results
+
+
+def model_policy_value(model, board):
+    return model_policy_value_batch(model, [board])[0]
 
 
 class Node:
@@ -172,38 +192,67 @@ def add_root_noise(root):
         child.prior = (1 - DIRICHLET_EPSILON) * child.prior + DIRICHLET_EPSILON * float(sample)
 
 
-def run_search(model, board, searches=None, add_noise=True):
+def run_search_batch(model, boards, searches=None, add_noise=True):
+    if not boards:
+        return []
     searches = MCTS_SEARCHES if searches is None else int(searches)
-    root = Node(board.copy(stack=True))
-    priors, root_value = model_policy_value(model, root.board)
-    root.expand(priors)
-    if add_noise:
-        add_root_noise(root)
-    root.visit_count = 1
-    root.value_sum = root_value
+    roots = [Node(board.copy(stack=True)) for board in boards]
+    root_predictions = model_policy_value_batch(model, [root.board for root in roots])
+    for root, (priors, root_value) in zip(roots, root_predictions):
+        root.expand(priors)
+        if add_noise:
+            add_root_noise(root)
+        root.visit_count = 1
+        root.value_sum = root_value
 
     for _ in range(max(1, searches)):
-        node = root
-        while node.children:
-            node = node.select_child()
+        leaves = []
+        values = [None] * len(roots)
+        pending_indices = []
+
+        for root_index, root in enumerate(roots):
+            node = root
+            while node.children:
+                node = node.select_child()
+                if node is None:
+                    break
+            leaves.append(node)
             if node is None:
-                break
-        if node is None:
-            break
+                continue
+            value = terminal_value(node.board)
+            if value is None:
+                pending_indices.append(root_index)
+            else:
+                values[root_index] = value
 
-        value = terminal_value(node.board)
-        if value is None:
-            priors, value = model_policy_value(model, node.board)
+        predictions = model_policy_value_batch(
+            model,
+            [leaves[index].board for index in pending_indices],
+        )
+        for root_index, (priors, value) in zip(pending_indices, predictions):
+            node = leaves[root_index]
             node.expand(priors)
-        node.backup(value)
+            values[root_index] = value
 
-    visits = {index: child.visit_count for index, child in root.children.items()}
-    total = sum(visits.values())
-    if total <= 0:
-        legal_indices = [move_to_index(move) for move in board.legal_moves]
-        probability = 1.0 / max(1, len(legal_indices))
-        return {index: probability for index in legal_indices}
-    return {index: count / total for index, count in visits.items()}
+        for node, value in zip(leaves, values):
+            if node is not None and value is not None:
+                node.backup(value)
+
+    policies = []
+    for root, board in zip(roots, boards):
+        visits = {index: child.visit_count for index, child in root.children.items()}
+        total = sum(visits.values())
+        if total <= 0:
+            legal_indices = [move_to_index(move) for move in board.legal_moves]
+            probability = 1.0 / max(1, len(legal_indices))
+            policies.append({index: probability for index in legal_indices})
+        else:
+            policies.append({index: count / total for index, count in visits.items()})
+    return policies
+
+
+def run_search(model, board, searches=None, add_noise=True):
+    return run_search_batch(model, [board], searches=searches, add_noise=add_noise)[0]
 
 
 def choose_action(policy, move_number, sample=True):
@@ -227,36 +276,55 @@ def result_for_white(board):
     return 1.0 if outcome.winner == chess.WHITE else -1.0
 
 
-def play_game(model, game_index):
-    board = chess.Board()
-    samples = []
-
+def play_games(model, first_game_index, game_count):
+    games = [
+        {"board": chess.Board(), "samples": [], "game_index": first_game_index + offset}
+        for offset in range(game_count)
+    ]
     for ply in range(MAX_PLIES):
-        if board.is_game_over(claim_draw=True):
+        active = [game for game in games if not game["board"].is_game_over(claim_draw=True)]
+        if not active:
             break
-        policy = run_search(model, board, add_noise=True)
-        action = choose_action(policy, ply, sample=True)
-        legal_by_index = {move_to_index(move): move for move in board.legal_moves}
-        move = legal_by_index.get(action)
-        if move is None:
-            move = random.choice(list(board.legal_moves))
+        policies = run_search_batch(model, [game["board"] for game in active], add_noise=True)
+        for game, policy in zip(active, policies):
+            board = game["board"]
+            action = choose_action(policy, ply, sample=True)
+            legal_by_index = {move_to_index(move): move for move in board.legal_moves}
+            move = legal_by_index.get(action)
+            if move is None:
+                move = random.choice(list(board.legal_moves))
 
-        samples.append(
-            {
-                "fen": board.fen(en_passant="fen"),
-                "turn": "white" if board.turn == chess.WHITE else "black",
-                "policy_version": POLICY_VERSION,
-                "policy": [[int(index), float(probability)] for index, probability in policy.items() if probability > 0],
-            }
+            game["samples"].append(
+                {
+                    "fen": board.fen(en_passant="fen"),
+                    "turn": "white" if board.turn == chess.WHITE else "black",
+                    "policy_version": POLICY_VERSION,
+                    "policy": [
+                        [int(index), float(probability)]
+                        for index, probability in policy.items()
+                        if probability > 0
+                    ],
+                }
+            )
+            board.push(move)
+
+    completed_samples = []
+    for game in games:
+        board = game["board"]
+        samples = game["samples"]
+        white_result = result_for_white(board)
+        for sample in samples:
+            sample["z"] = white_result if sample["turn"] == "white" else -white_result
+        print(
+            f"[self-play] game {game['game_index'] + 1}: "
+            f"{len(samples)} plies, result {board.result(claim_draw=True)}"
         )
-        board.push(move)
+        completed_samples.append(samples)
+    return completed_samples
 
-    white_result = result_for_white(board)
-    for sample in samples:
-        sample["z"] = white_result if sample["turn"] == "white" else -white_result
 
-    print(f"[self-play] game {game_index + 1}: {len(samples)} plies, result {board.result(claim_draw=True)}")
-    return samples
+def play_game(model, game_index):
+    return play_games(model, game_index, 1)[0]
 
 
 def play_arena_game(candidate, baseline, candidate_is_white, searches=24, max_plies=160, opening=None):
@@ -287,7 +355,16 @@ def play_arena_game(candidate, baseline, candidate_is_white, searches=24, max_pl
 
 
 def arena_score(candidate, baseline, games=2, searches=24, max_plies=160):
-    openings = (("e2e4", "e7e5"), ("d2d4", "d7d5"), ("c2c4", "e7e5"))
+    openings = (
+        ("e2e4", "e7e5"),
+        ("d2d4", "d7d5"),
+        ("c2c4", "e7e5"),
+        ("g1f3", "d7d5"),
+        ("e2e4", "c7c5"),
+        ("d2d4", "g8f6"),
+        ("c2c4", "c7c5"),
+        ("g1f3", "g8f6"),
+    )
     scores = []
     for game_index in range(max(0, games)):
         candidate_is_white = game_index % 2 == 0
@@ -311,8 +388,11 @@ def main():
     existing = read_json_list(SELF_PLAY_BUFFER)
     new_samples = []
 
-    for game_index in range(SELF_PLAY_GAMES):
-        new_samples.extend(play_game(model, game_index))
+    batch_size = max(1, SELF_PLAY_BATCH_SIZE)
+    for first_game_index in range(0, SELF_PLAY_GAMES, batch_size):
+        game_count = min(batch_size, SELF_PLAY_GAMES - first_game_index)
+        for samples in play_games(model, first_game_index, game_count):
+            new_samples.extend(samples)
 
     merged = existing + new_samples
     if len(merged) > MAX_BUFFER:

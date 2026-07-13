@@ -452,9 +452,9 @@ export default function ChessBoard() {
       aiMove = await pickRandomMove(pieces, color, enPassantTarget);
     } else if (mode === "mcts") {
       aiMove = await pickMCTSMove(pieces, color, enPassantTarget, {
-        timeMs: 1200,
-        maxIterations: 3000,
-        rolloutDepth: 40,
+        timeMs: 2000,
+        maxIterations: 4096,
+        batchSize: 16,
       });
     } else if (mode === "nn") {
       aiMove = await pickNNMove(pieces, color, enPassantTarget);
@@ -527,7 +527,7 @@ export default function ChessBoard() {
   const modes = [
     { key: "human", label: "Human" },
     { key: "random", label: "Random" },
-    { key: "mcts", label: "MCTS" },
+    { key: "mcts", label: "Neural MCTS" },
     { key: "nn", label: "NN" },
   ];
 

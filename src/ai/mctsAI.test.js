@@ -2,22 +2,33 @@ import { listLegalMoves } from '../rules/chessRules';
 
 jest.mock('./nnAI', () => ({
   moveKey: (move) => `${move.from.x}-${move.from.y}:${move.to.x}-${move.to.y}:${move.promotionType || ''}`,
+  predictPolicyValueBatchForPositions: jest.fn(),
   predictPolicyValueForMoves: jest.fn(),
 }));
 
-import { moveKey, predictPolicyValueForMoves } from './nnAI';
+import {
+  moveKey,
+  predictPolicyValueBatchForPositions,
+  predictPolicyValueForMoves,
+} from './nnAI';
 import { pickMCTSMove } from './mctsAI';
 
 const piece = (color, type, hasMoved = false) => ({ color, type, hasMoved });
 
 describe('neural PUCT MCTS', () => {
   beforeEach(() => {
-    predictPolicyValueForMoves.mockImplementation(async (pieces, color, enPassantTarget) => {
+    const predict = async (pieces, color, enPassantTarget) => {
       const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
       const probability = 1 / Math.max(1, legalMoves.length);
       const priors = new Map(legalMoves.map((move) => [moveKey(move), probability]));
       return { value: 0, priors, legalMoves };
-    });
+    };
+    predictPolicyValueForMoves.mockImplementation(predict);
+    predictPolicyValueBatchForPositions.mockImplementation(
+      async (positions) => Promise.all(
+        positions.map(({ pieces, color, enPassantTarget }) => predict(pieces, color, enPassantTarget)),
+      ),
+    );
   });
 
   test('returns one of the legal moves', async () => {
@@ -32,10 +43,14 @@ describe('neural PUCT MCTS', () => {
     const chosen = await pickMCTSMove(pieces, 'white', null, {
       timeMs: 1000,
       maxIterations: 8,
+      batchSize: 4,
       cpuct: 1.5,
     });
 
-    expect(predictPolicyValueForMoves).toHaveBeenCalled();
+    expect(predictPolicyValueBatchForPositions).toHaveBeenCalled();
+    expect(
+      predictPolicyValueBatchForPositions.mock.calls.some(([positions]) => positions.length > 1),
+    ).toBe(true);
     expect(chosen).not.toBeNull();
     expect(
       legalMoves.some(
