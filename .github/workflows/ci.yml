@@ -45,6 +45,8 @@ jobs:
           name: browser-test-log
           path: browser-test.log
           if-no-files-found: warn
+      - name: Optimize browser neural model
+        run: python3 scripts/quantize_tfjs_model.py public/nn/model.json
       - name: Build production site
         run: npm run build
 

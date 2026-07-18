@@ -7,6 +7,7 @@ export const POLICY_SIZE = 64 * 64 * POLICY_CHANNELS;
 const LEGACY_POLICY_SIZE = 64 * 64;
 
 let modelPromise = null;
+let modelWarmPromise = null;
 
 async function loadModel() {
   if (!modelPromise) {
@@ -16,6 +17,28 @@ async function loadModel() {
     });
   }
   return modelPromise;
+}
+
+export async function warmNNModel() {
+  if (!modelWarmPromise) {
+    modelWarmPromise = loadModel().then(async (model) => {
+      const planeCount = Number(model.inputs?.[0]?.shape?.[3]) || 18;
+      const input = tf.zeros([1, 8, 8, planeCount]);
+      const prediction = model.predict(input);
+      const outputs = Array.isArray(prediction) ? prediction : [prediction];
+
+      try {
+        await Promise.all(outputs.map((output) => output.data()));
+      } finally {
+        tf.dispose([input, ...outputs]);
+      }
+      return model;
+    }).catch((error) => {
+      modelWarmPromise = null;
+      throw error;
+    });
+  }
+  return modelWarmPromise;
 }
 
 function boardCoordToSquare(pos) {
@@ -161,7 +184,7 @@ export async function predictPolicyValueBatchForPositions(positions) {
   if (pending.length === 0) return results;
 
   try {
-    const model = await loadModel();
+    const model = await warmNNModel();
     const predictions = await rawPredictions(model, pending);
     pending.forEach((position, pendingIndex) => {
       results[position.index] = predictionForLegalMoves(position.legalMoves, predictions[pendingIndex]);

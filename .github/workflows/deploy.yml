@@ -31,6 +31,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      - name: Optimize browser neural model
+        run: python3 scripts/quantize_tfjs_model.py public/nn/model.json
+
       - name: Build
         run: npm run build
 

@@ -28,16 +28,16 @@ def weight_name(layer: tf.keras.layers.Layer, weight) -> str:
     return name
 
 
-def float32_bytes(array: np.ndarray) -> bytes:
-    array = np.asarray(array)
-    if array.dtype != np.float32:
-        array = array.astype(np.float32)
-    return np.ascontiguousarray(array).tobytes(order="C")
+def float16_bytes(array: np.ndarray) -> bytes:
+    return np.ascontiguousarray(array, dtype="<f2").tobytes(order="C")
 
 
 def export_keras_layers_model(model: tf.keras.Model, out_dir: pathlib.Path) -> pathlib.Path:
-    """Write a TFJS Layers model.json and one weight shard for model."""
+    """Write a float16-quantized TFJS Layers model and one weight shard"""
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    for stale_shard in out_dir.glob("group*.bin"):
+        stale_shard.unlink()
 
     weights_manifest = []
     weight_chunks = []
@@ -50,8 +50,9 @@ def export_keras_layers_model(model: tf.keras.Model, out_dir: pathlib.Path) -> p
                 "name": weight_name(layer, weight),
                 "shape": list(array.shape),
                 "dtype": "float32",
+                "quantization": {"dtype": "float16"},
             })
-            weight_chunks.append(float32_bytes(array))
+            weight_chunks.append(float16_bytes(array))
 
     (out_dir / WEIGHTS_FILENAME).write_bytes(b"".join(weight_chunks))
 
