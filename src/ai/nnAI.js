@@ -1,5 +1,6 @@
 import * as tf from '@tensorflow/tfjs';
 import { listLegalMoves, makeMove, getPiece, isKingInCheck } from '../rules/chessRules';
+import { rankMoves, stabilizePolicyValue } from './chessHeuristics';
 
 export const POLICY_CHANNELS = 5;
 export const POLICY_SIZE = 64 * 64 * POLICY_CHANNELS;
@@ -124,25 +125,11 @@ async function rawPredictions(model, positions) {
   }
 }
 
-async function rawPrediction(model, pieces, isWhiteTurn, enPassantTarget) {
-  const predictions = await rawPredictions(model, [{
-    pieces,
-    color: isWhiteTurn ? 'white' : 'black',
-    enPassantTarget,
-  }]);
-  return predictions[0];
-}
-
-async function evalPosition(model, pieces, isWhiteTurn, enPassantTarget) {
-  const { value } = await rawPrediction(model, pieces, isWhiteTurn, enPassantTarget);
-  return value;
-}
-
 function uniformPrediction(legalMoves) {
   const uniform = 1 / Math.max(1, legalMoves.length);
   const priors = new Map();
   legalMoves.forEach((move) => priors.set(moveKey(move), uniform));
-  return { value: 0, priors, legalMoves };
+  return { value: 0, priors, legalMoves, neuralAvailable: false };
 }
 
 function predictionForLegalMoves(legalMoves, raw) {
@@ -151,7 +138,7 @@ function predictionForLegalMoves(legalMoves, raw) {
   const probabilities = stableSoftmax(logits);
   const priors = new Map();
   legalMoves.forEach((move, index) => priors.set(moveKey(move), probabilities[index]));
-  return { value: raw.value, priors, legalMoves };
+  return { value: raw.value, priors, legalMoves, neuralAvailable: true };
 }
 
 export async function predictPolicyValueBatchForPositions(positions) {
@@ -194,56 +181,97 @@ export async function predictPolicyValueForMoves(pieces, color, enPassantTarget)
   return prediction;
 }
 
-export async function pickNNMove(pieces, color, enPassantTarget, depth = 2) {
-  const moves = listLegalMoves(pieces, color, enPassantTarget);
-  let bestMove = null;
-  let bestScore = -Infinity;
-
-  for (const move of moves) {
-    const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
-    const { pieces: after, nextEnPassant } = makeMove(
-      pieces,
-      move.from,
-      move.to,
-      promotion,
-      enPassantTarget,
-    );
-    const nextColor = color === 'white' ? 'black' : 'white';
-    const score = -(await negamax(after, depth - 1, nextColor, nextEnPassant));
-    if (score > bestScore) {
-      bestScore = score;
-      bestMove = { ...move, promotionType: promotion };
-    }
-  }
-
-  return bestMove;
+function applyMove(pieces, move, enPassantTarget) {
+  const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
+  const result = makeMove(pieces, move.from, move.to, promotion, enPassantTarget);
+  return {
+    ...result,
+    move: { ...move, promotionType: promotion },
+  };
 }
 
-async function negamax(pieces, depth, color, enPassantTarget) {
-  const moves = listLegalMoves(pieces, color, enPassantTarget);
-  if (moves.length === 0) return isKingInCheck(pieces, color) ? -1 : 0;
-
-  if (depth === 0) {
-    try {
-      const model = await loadModel();
-      return await evalPosition(model, pieces, color === 'white', enPassantTarget);
-    } catch (error) {
-      return 0;
-    }
-  }
+export async function pickNNMove(
+  pieces,
+  color,
+  enPassantTarget,
+  depth = 2,
+  {
+    predictBatch = predictPolicyValueBatchForPositions,
+    rootMoveLimit = 12,
+    replyLimit = 10,
+  } = {},
+) {
+  const [rawRoot] = await predictBatch([{ pieces, color, enPassantTarget }]);
+  const rootPrediction = stabilizePolicyValue(
+    pieces,
+    color,
+    enPassantTarget,
+    rawRoot,
+  );
+  const rootMoves = rankMoves(rootPrediction).slice(0, Math.max(1, rootMoveLimit));
+  if (rootMoves.length === 0) return null;
+  if (depth <= 1) return applyMove(pieces, rootMoves[0], enPassantTarget).move;
 
   const nextColor = color === 'white' ? 'black' : 'white';
-  let best = -Infinity;
-  for (const move of moves) {
-    const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
-    const { pieces: after, nextEnPassant } = makeMove(
-      pieces,
-      move.from,
-      move.to,
-      promotion,
-      enPassantTarget,
+  const candidates = rootMoves.map((move) => ({
+    ...applyMove(pieces, move, enPassantTarget),
+    score: Infinity,
+  }));
+  const rawReplies = await predictBatch(candidates.map((candidate) => ({
+    pieces: candidate.pieces,
+    color: nextColor,
+    enPassantTarget: candidate.nextEnPassant,
+  })));
+  const leaves = [];
+
+  candidates.forEach((candidate, candidateIndex) => {
+    const replyPrediction = stabilizePolicyValue(
+      candidate.pieces,
+      nextColor,
+      candidate.nextEnPassant,
+      rawReplies[candidateIndex],
     );
-    best = Math.max(best, -(await negamax(after, depth - 1, nextColor, nextEnPassant)));
+    if (replyPrediction.legalMoves.length === 0) {
+      candidate.score = isKingInCheck(candidate.pieces, nextColor) ? 1 : 0;
+      return;
+    }
+
+    const replies = rankMoves(replyPrediction).slice(0, Math.max(1, replyLimit));
+    replies.forEach((reply) => {
+      const afterReply = applyMove(candidate.pieces, reply, candidate.nextEnPassant);
+      leaves.push({
+        candidateIndex,
+        pieces: afterReply.pieces,
+        color,
+        enPassantTarget: afterReply.nextEnPassant,
+      });
+    });
+  });
+
+  if (leaves.length > 0) {
+    const rawLeaves = await predictBatch(leaves);
+    leaves.forEach((leaf, leafIndex) => {
+      const leafPrediction = stabilizePolicyValue(
+        leaf.pieces,
+        leaf.color,
+        leaf.enPassantTarget,
+        rawLeaves[leafIndex],
+      );
+      candidates[leaf.candidateIndex].score = Math.min(
+        candidates[leaf.candidateIndex].score,
+        leafPrediction.value,
+      );
+    });
   }
-  return best;
+
+  const best = candidates.reduce((current, candidate) => {
+    const moveId = moveKey(candidate.move);
+    const priorBonus = 0.1 * (rootPrediction.priors.get(moveId) || 0);
+    const positionalBonus = 0.04 * (rootPrediction.moveScores.get(moveId) || 0);
+    const score = candidate.score + priorBonus + positionalBonus;
+    if (!current || score > current.score) return { candidate, score };
+    return current;
+  }, null);
+
+  return best?.candidate.move || null;
 }

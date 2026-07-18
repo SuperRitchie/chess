@@ -20,6 +20,7 @@ ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
 MCTS_EVAL_POSITIONS = int(os.environ.get("AZ_MCTS_EVAL_POSITIONS", "48"))
 MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
 MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
+MIN_MCTS_TOP_MOVE_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_TOP_MOVE_IMPROVEMENT", "0.0"))
 _EPS = 1e-7
 
 
@@ -277,6 +278,32 @@ def evaluate_mcts_alignment(model: tf.keras.Model | None, samples: list[dict], l
     return metrics
 
 
+def mcts_candidate_passes(
+    baseline_metrics: dict | None,
+    candidate_metrics: dict | None,
+) -> tuple[bool, str]:
+    if baseline_metrics is None or candidate_metrics is None:
+        return False, "candidate_mcts_evaluation_unavailable"
+
+    baseline_alignment = baseline_metrics.get("alignment")
+    candidate_alignment = candidate_metrics.get("alignment")
+    baseline_accuracy = baseline_metrics.get("top_move_accuracy")
+    candidate_accuracy = candidate_metrics.get("top_move_accuracy")
+    values = [baseline_alignment, candidate_alignment, baseline_accuracy, candidate_accuracy]
+    if any(value is None or not np.isfinite(value) for value in values):
+        return False, "candidate_mcts_metrics_unavailable"
+
+    required_alignment = baseline_alignment + MIN_MCTS_ALIGNMENT_IMPROVEMENT
+    if candidate_alignment < required_alignment:
+        return False, "candidate_mcts_alignment_did_not_improve"
+
+    required_accuracy = baseline_accuracy + MIN_MCTS_TOP_MOVE_IMPROVEMENT
+    if candidate_accuracy < required_accuracy:
+        return False, "candidate_mcts_top_move_accuracy_regressed"
+
+    return True, "mcts_policy_improved"
+
+
 def main():
     fixed_samples = load_fixed_eval_set()
     excluded_fens = {item.get("fen") for item in fixed_samples if item.get("fen")}
@@ -323,16 +350,15 @@ def main():
     if accepted and resumed:
         baseline_mcts_eval = evaluate_mcts_alignment(baseline_model, fixed_samples, "previous")
         candidate_mcts_eval = evaluate_mcts_alignment(model, fixed_samples, "candidate")
-        if baseline_mcts_eval is None or candidate_mcts_eval is None:
+        mcts_accepted, mcts_reason = mcts_candidate_passes(
+            baseline_mcts_eval,
+            candidate_mcts_eval,
+        )
+        if not mcts_accepted:
             accepted = False
-            gate_reason = "candidate_mcts_evaluation_unavailable"
+            gate_reason = mcts_reason
         else:
-            required_alignment = baseline_mcts_eval["alignment"] + MIN_MCTS_ALIGNMENT_IMPROVEMENT
-            if candidate_mcts_eval["alignment"] < required_alignment:
-                accepted = False
-                gate_reason = "candidate_mcts_alignment_did_not_improve"
-            else:
-                gate_reason = f"{gate_reason}_and_mcts_improved"
+            gate_reason = f"{gate_reason}_and_{mcts_reason}"
 
     arena_result = None
     if accepted and resumed and baseline_model is not None and ARENA_GAMES > 0:
@@ -387,6 +413,7 @@ def main():
                 "baseline_mcts_top_move_accuracy": baseline_mcts_eval["top_move_accuracy"],
                 "candidate_mcts_top_move_accuracy": candidate_mcts_eval["top_move_accuracy"],
                 "min_mcts_alignment_improvement": MIN_MCTS_ALIGNMENT_IMPROVEMENT,
+                "min_mcts_top_move_improvement": MIN_MCTS_TOP_MOVE_IMPROVEMENT,
             }
         )
 
