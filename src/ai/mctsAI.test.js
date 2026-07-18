@@ -17,6 +17,7 @@ const piece = (color, type, hasMoved = false) => ({ color, type, hasMoved });
 
 describe('neural PUCT MCTS', () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     const predict = async (pieces, color, enPassantTarget) => {
       const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
       const probability = 1 / Math.max(1, legalMoves.length);
@@ -62,5 +63,23 @@ describe('neural PUCT MCTS', () => {
           (move.promotionType || null) === (chosen.promotionType || null),
       ),
     ).toBe(true);
+  });
+
+  test('plays an available checkmate before neural search', async () => {
+    const pieces = {
+      '0-0': piece('black', 'king'),
+      '2-2': piece('white', 'king'),
+      '2-1': piece('white', 'queen'),
+    };
+
+    const chosen = await pickMCTSMove(pieces, 'white', null, {
+      timeMs: 1000,
+      maxIterations: 1,
+      batchSize: 1,
+    });
+
+    expect(chosen.from).toEqual({ x: 2, y: 1 });
+    expect(chosen.to).toEqual({ x: 1, y: 1 });
+    expect(predictPolicyValueBatchForPositions).not.toHaveBeenCalled();
   });
 });

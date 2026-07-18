@@ -1,21 +1,25 @@
 # ml/train_fixed_eval.py
-"""Train with a persistent holdout set and an optional model-vs-model arena."""
+"""train with persistent neural and search-quality holdouts"""
 import os
 import random
 
+import chess
 import numpy as np
 import tensorflow as tf
 
 import train
-from self_play import arena_score
+from self_play import arena_score, run_search_batch
 
-FIXED_EVAL_SET = train.pathlib.Path("ml/data/fixed_eval_set_v2.json")
+FIXED_EVAL_SET = train.pathlib.Path("ml/data/fixed_eval_set_v3.json")
 FIXED_EVAL_SELF = int(os.environ.get("AZ_FIXED_EVAL_SELF", "512"))
 FIXED_EVAL_STOCKFISH = int(os.environ.get("AZ_FIXED_EVAL_STOCKFISH", "512"))
 ARENA_GAMES = int(os.environ.get("AZ_ARENA_GAMES", "2"))
 ARENA_SEARCHES = int(os.environ.get("AZ_ARENA_SEARCHES", "24"))
 ARENA_MAX_PLIES = int(os.environ.get("AZ_ARENA_MAX_PLIES", "160"))
 ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
+MCTS_EVAL_POSITIONS = int(os.environ.get("AZ_MCTS_EVAL_POSITIONS", "48"))
+MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
+MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
 _EPS = 1e-7
 
 
@@ -48,7 +52,17 @@ def _valid_stockfish_sample(item: dict) -> dict | None:
         cp = float(item.get("cp", 0.0))
     except (TypeError, ValueError):
         return None
-    return {"source": "stockfish", "fen": fen, "cp": cp}
+    policy_version = int(item.get("policy_version", 1))
+    policy = train.dense_policy_from_sparse(item.get("policy"), fen=fen, policy_version=policy_version)
+    if float(np.sum(policy)) <= 0:
+        return None
+    return {
+        "source": "stockfish",
+        "fen": fen,
+        "cp": cp,
+        "policy_version": policy_version,
+        "policy": item.get("policy"),
+    }
 
 
 def _pick_deterministic(items: list[dict], count: int, salt: str) -> list[dict]:
@@ -65,14 +79,15 @@ def create_fixed_eval_set() -> list[dict]:
         if sample is not None:
             self_items.append(sample)
 
-    stockfish_items = []
-    for item in train.normalize_labels(train.read_json_list(train.STOCKFISH_REPLAY_BUFFER)):
+    stockfish_by_fen = {}
+    source_items = train.read_json_list(train.STOCKFISH_REPLAY_BUFFER) + train.read_json_list(train.LABELS)
+    for item in train.normalize_labels(source_items):
         sample = _valid_stockfish_sample(item)
         if sample is not None:
-            stockfish_items.append(sample)
+            stockfish_by_fen[sample["fen"]] = sample
 
     fixed_items = _pick_deterministic(self_items, FIXED_EVAL_SELF, "self-v2")
-    fixed_items += _pick_deterministic(stockfish_items, FIXED_EVAL_STOCKFISH, "stockfish-v2")
+    fixed_items += _pick_deterministic(list(stockfish_by_fen.values()), FIXED_EVAL_STOCKFISH, "stockfish-v3")
     if not fixed_items:
         raise ValueError("could not create fixed evaluation set: no valid samples")
 
@@ -84,7 +99,8 @@ def create_fixed_eval_set() -> list[dict]:
 
 def load_fixed_eval_set() -> list[dict]:
     items = train.read_json_list(FIXED_EVAL_SET)
-    return items if items else create_fixed_eval_set()
+    stockfish_count = sum(item.get("source") == "stockfish" for item in items)
+    return items if items and stockfish_count > 0 else create_fixed_eval_set()
 
 
 def fixed_eval_arrays(samples: list[dict]):
@@ -95,8 +111,6 @@ def fixed_eval_arrays(samples: list[dict]):
     value_weights = []
     self_count = 0
     stockfish_count = 0
-    zero_policy = np.zeros((train.POLICY_SIZE,), dtype=np.float32)
-
     for sample in samples:
         source = sample.get("source")
         fen = sample.get("fen")
@@ -126,10 +140,17 @@ def fixed_eval_arrays(samples: list[dict]):
                 cp = float(sample.get("cp", 0.0))
             except (TypeError, ValueError):
                 continue
+            policy = train.dense_policy_from_sparse(
+                sample.get("policy"),
+                fen=fen,
+                policy_version=int(sample.get("policy_version", train.POLICY_VERSION)),
+            )
+            if float(np.sum(policy)) <= 0:
+                continue
             X.append(train.board_to_features(fen))
-            policy_y.append(zero_policy.copy())
+            policy_y.append(policy)
             value_y.append(train.cp_to_value(cp))
-            policy_weights.append(0.0)
+            policy_weights.append(1.0)
             value_weights.append(1.0)
             stockfish_count += 1
 
@@ -199,6 +220,63 @@ def evaluate_fixed_model(model: tf.keras.Model | None, X, P, V, PW, VW, label: s
     return metrics
 
 
+def evaluate_mcts_alignment(model: tf.keras.Model | None, samples: list[dict], label: str) -> dict | None:
+    if model is None or MCTS_EVAL_POSITIONS <= 0:
+        return None
+
+    boards = []
+    targets = []
+    for sample in samples:
+        if sample.get("source") != "stockfish":
+            continue
+        fen = sample.get("fen")
+        if not fen:
+            continue
+        target = train.dense_policy_from_sparse(
+            sample.get("policy"),
+            fen=fen,
+            policy_version=int(sample.get("policy_version", train.POLICY_VERSION)),
+        )
+        if float(np.sum(target)) <= 0:
+            continue
+        try:
+            boards.append(chess.Board(fen))
+        except ValueError:
+            continue
+        targets.append(target)
+        if len(boards) >= MCTS_EVAL_POSITIONS:
+            break
+
+    if not boards:
+        print(f"[mcts-eval] {label} unavailable: no Stockfish policy holdout")
+        return None
+
+    search_policies = run_search_batch(
+        model,
+        boards,
+        searches=MCTS_EVAL_SEARCHES,
+        add_noise=False,
+    )
+    alignments = []
+    top_move_hits = []
+    for search_policy, target in zip(search_policies, targets):
+        alignments.append(sum(float(target[index]) * probability for index, probability in search_policy.items()))
+        chosen = max(search_policy, key=search_policy.get)
+        top_move_hits.append(chosen == int(np.argmax(target)))
+
+    metrics = {
+        "positions": len(boards),
+        "searches": MCTS_EVAL_SEARCHES,
+        "alignment": float(np.mean(alignments)),
+        "top_move_accuracy": float(np.mean(top_move_hits)),
+    }
+    print(
+        f"[mcts-eval] {label} alignment {metrics['alignment']:.6f}, "
+        f"top move {metrics['top_move_accuracy']:.3f} over {len(boards)} positions"
+    )
+    return metrics
+
+
 def main():
     fixed_samples = load_fixed_eval_set()
     excluded_fens = {item.get("fen") for item in fixed_samples if item.get("fen")}
@@ -239,6 +317,22 @@ def main():
     moving_candidate_eval = train.evaluate_model(model, Xva, Pva, Vva, PWva, VWva, "candidate moving")
     fixed_candidate_eval = evaluate_fixed_model(model, Xev, Pev, Vev, PWev, VWev, "candidate fixed")
     accepted, gate_reason = train.should_accept_candidate(fixed_candidate_eval, fixed_baseline_eval, resumed)
+
+    baseline_mcts_eval = None
+    candidate_mcts_eval = None
+    if accepted and resumed:
+        baseline_mcts_eval = evaluate_mcts_alignment(baseline_model, fixed_samples, "previous")
+        candidate_mcts_eval = evaluate_mcts_alignment(model, fixed_samples, "candidate")
+        if baseline_mcts_eval is None or candidate_mcts_eval is None:
+            accepted = False
+            gate_reason = "candidate_mcts_evaluation_unavailable"
+        else:
+            required_alignment = baseline_mcts_eval["alignment"] + MIN_MCTS_ALIGNMENT_IMPROVEMENT
+            if candidate_mcts_eval["alignment"] < required_alignment:
+                accepted = False
+                gate_reason = "candidate_mcts_alignment_did_not_improve"
+            else:
+                gate_reason = f"{gate_reason}_and_mcts_improved"
 
     arena_result = None
     if accepted and resumed and baseline_model is not None and ARENA_GAMES > 0:
@@ -281,6 +375,18 @@ def main():
                 "arena_searches": ARENA_SEARCHES,
                 "arena_candidate_score": arena_result,
                 "arena_min_score": ARENA_MIN_SCORE,
+            }
+        )
+    if baseline_mcts_eval and candidate_mcts_eval:
+        extra_metrics.update(
+            {
+                "mcts_eval_positions": candidate_mcts_eval["positions"],
+                "mcts_eval_searches": candidate_mcts_eval["searches"],
+                "baseline_mcts_alignment": baseline_mcts_eval["alignment"],
+                "candidate_mcts_alignment": candidate_mcts_eval["alignment"],
+                "baseline_mcts_top_move_accuracy": baseline_mcts_eval["top_move_accuracy"],
+                "candidate_mcts_top_move_accuracy": candidate_mcts_eval["top_move_accuracy"],
+                "min_mcts_alignment_improvement": MIN_MCTS_ALIGNMENT_IMPROVEMENT,
             }
         )
 

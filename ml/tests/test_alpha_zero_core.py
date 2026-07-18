@@ -1,8 +1,12 @@
+import json
 import pathlib
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 import chess
+import chess.engine
 import numpy as np
 
 ML_DIR = pathlib.Path(__file__).resolve().parents[1]
@@ -10,8 +14,10 @@ if str(ML_DIR) not in sys.path:
     sys.path.insert(0, str(ML_DIR))
 
 import features
+import fen_utils
 import policy_map
 import self_play
+import stockfish_eval
 import train
 
 
@@ -51,6 +57,61 @@ class FeatureTests(unittest.TestCase):
         col = chess.square_file(chess.F3)
         self.assertEqual(encoded[row, col, 17], 1.0)
         self.assertEqual(float(np.sum(encoded[:, :, 17])), 1.0)
+
+
+class DataPipelineTests(unittest.TestCase):
+    def test_canonical_fen_removes_move_counters(self):
+        first = "8/8/8/8/8/8/4K3/7k w - - 17 48"
+        second = "8/8/8/8/8/8/4K3/7k w - - 0 1"
+        self.assertEqual(fen_utils.canonical_fen(first), fen_utils.canonical_fen(second))
+
+    def test_stockfish_analysis_creates_policy_target(self):
+        class FakeEngine:
+            def analyse(self, board, limit, multipv):
+                return [
+                    {
+                        "score": chess.engine.PovScore(chess.engine.Cp(score), chess.WHITE),
+                        "pv": [chess.Move.from_uci(move)],
+                    }
+                    for move, score in (("e2e4", 80), ("d2d4", 50), ("g1f3", 20))
+                ]
+
+        label = stockfish_eval.analyse_position(FakeEngine(), chess.STARTING_FEN)
+
+        self.assertEqual(label["policy_version"], policy_map.POLICY_VERSION)
+        self.assertEqual(len(label["policy"]), 3)
+        self.assertAlmostEqual(sum(item[1] for item in label["policy"]), 1.0)
+        self.assertEqual(label["policy"][0][0], policy_map.move_to_index(chess.Move.from_uci("e2e4")))
+
+    def test_replay_freshness_counts_only_unseen_positions(self):
+        first_fen = fen_utils.canonical_fen(chess.STARTING_FEN)
+        board = chess.Board()
+        board.push_uci("e2e4")
+        second_fen = fen_utils.canonical_fen(board.fen(en_passant="fen"))
+        first_policy = [[policy_map.move_to_index(chess.Move.from_uci("e2e4")), 1.0]]
+        with tempfile.TemporaryDirectory() as directory:
+            replay_path = pathlib.Path(directory) / "replay.json"
+            replay_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "fen": first_fen,
+                            "cp": 0,
+                            "policy_version": policy_map.POLICY_VERSION,
+                            "policy": first_policy,
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(train, "STOCKFISH_REPLAY_BUFFER", replay_path):
+                merged, novel_count = train.merge_stockfish_replay_buffer(
+                    [{"fen": first_fen, "cp": 10}, {"fen": second_fen, "cp": 20}]
+                )
+
+        self.assertEqual(novel_count, 1)
+        self.assertEqual({item["fen"] for item in merged}, {first_fen, second_fen})
+        self.assertEqual(next(item for item in merged if item["fen"] == first_fen)["policy"], first_policy)
 
 
 class SearchAndModelTests(unittest.TestCase):
