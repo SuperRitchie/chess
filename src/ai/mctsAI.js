@@ -4,6 +4,7 @@ import {
   predictPolicyValueBatchForPositions,
   predictPolicyValueForMoves,
 } from './nnAI';
+import { stabilizePolicyValue } from './chessHeuristics';
 
 const DEFAULT_CPUCT = 1.5;
 
@@ -28,6 +29,7 @@ function uniformPrediction(pieces, color, enPassantTarget) {
     value: 0,
     legalMoves,
     priors: new Map(legalMoves.map((move) => [moveKey(move), probability])),
+    neuralAvailable: false,
   };
 }
 
@@ -126,11 +128,13 @@ async function evaluateAndExpand(node) {
     console.warn('Neural MCTS inference failed; using uniform priors.', error);
   }
 
-  const { value, priors, legalMoves } = prediction || uniformPrediction(
+  const stabilized = stabilizePolicyValue(
     node.pieces,
     node.toMove,
     node.enPassantTarget,
+    prediction || uniformPrediction(node.pieces, node.toMove, node.enPassantTarget),
   );
+  const { value, priors, legalMoves } = stabilized;
   node.expand(legalMoves, priors);
   return Number.isFinite(value) ? value : 0;
 }
@@ -171,10 +175,15 @@ async function evaluateAndExpandBatch(nodes) {
   }
 
   pending.forEach(({ node, index }, predictionIndex) => {
-    const prediction = predictions[predictionIndex] || uniformPrediction(
+    const prediction = stabilizePolicyValue(
       node.pieces,
       node.toMove,
       node.enPassantTarget,
+      predictions[predictionIndex] || uniformPrediction(
+        node.pieces,
+        node.toMove,
+        node.enPassantTarget,
+      ),
     );
     node.expand(prediction.legalMoves, prediction.priors);
     values[index] = Number.isFinite(prediction.value) ? prediction.value : 0;

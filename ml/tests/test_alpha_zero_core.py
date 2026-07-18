@@ -19,6 +19,7 @@ import policy_map
 import self_play
 import stockfish_eval
 import train
+import train_fixed_eval
 
 
 class PolicyMapTests(unittest.TestCase):
@@ -135,6 +136,24 @@ class SearchAndModelTests(unittest.TestCase):
         self.assertEqual(
             train.should_accept_candidate({"loss": 0.9}, None, resumed=True),
             (False, "previous_validation_failed"),
+        )
+
+    def test_mcts_gate_rejects_top_move_accuracy_regression(self):
+        baseline = {"alignment": 0.0634, "top_move_accuracy": 0.1042}
+        candidate = {"alignment": 0.0650, "top_move_accuracy": 0.0833}
+
+        self.assertEqual(
+            train_fixed_eval.mcts_candidate_passes(baseline, candidate),
+            (False, "candidate_mcts_top_move_accuracy_regressed"),
+        )
+
+    def test_mcts_gate_requires_alignment_gain_without_accuracy_loss(self):
+        baseline = {"alignment": 0.0634, "top_move_accuracy": 0.1042}
+        candidate = {"alignment": 0.0650, "top_move_accuracy": 0.1094}
+
+        self.assertEqual(
+            train_fixed_eval.mcts_candidate_passes(baseline, candidate),
+            (True, "mcts_policy_improved"),
         )
 
     def test_batched_search_shares_model_calls_across_games(self):
