@@ -195,6 +195,11 @@ export async function pickMCTSMove(
   root.valueSum = rootValue;
   if (root.children.length === 0) return null;
 
+  const immediateMate = root.children.find(
+    (child) => terminalValue(child.pieces, child.toMove, child.enPassantTarget) === -1,
+  );
+  if (immediateMate) return immediateMate.move;
+
   const deadline = Date.now() + Math.max(1, timeMs);
   let iterations = 0;
   while (iterations < maxIterations && Date.now() < deadline) {

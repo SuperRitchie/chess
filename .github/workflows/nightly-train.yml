@@ -46,31 +46,44 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
       - name: Fetch Lichess games
+        env:
+          LICHESS_FETCH_SEED: ${{ github.run_number }}
+          LICHESS_USER_COUNT: "10"
+          LICHESS_MAX_GAMES: "300"
         run: python ml/fetch_lichess.py
       - name: Extract positions
         env:
           POSITION_SEED: ${{ github.run_number }}
+          POSITION_TARGET_NEW: "5000"
+          POSITION_MIN_NEW: "3000"
+          POSITION_PER_GAME: "32"
         run: python ml/extract_positions.py
       - name: Evaluate uncached positions with Stockfish
         env:
           SF_DEPTH: "12"
+          SF_MULTIPV: "3"
           STOCKFISH_PATH: stockfish
         run: python ml/stockfish_eval.py
       - name: Continue NN learning, evaluate, and export TFJS
         env:
           TRAIN_SEED: ${{ github.run_number }}
-          AZ_MAX_SELF_PLAY_TRAIN: "12000"
-          AZ_MAX_STOCKFISH_TRAIN: "12000"
+          AZ_MAX_SELF_PLAY_TRAIN: "16000"
+          AZ_MAX_STOCKFISH_TRAIN: "24000"
+          AZ_STOCKFISH_POLICY_WEIGHT: "1.0"
+          CONTINUE_EPOCHS: "4"
           AZ_ARENA_GAMES: "8"
-          AZ_ARENA_SEARCHES: "48"
+          AZ_ARENA_SEARCHES: "64"
           AZ_ARENA_MIN_SCORE: "0.5"
+          AZ_MCTS_EVAL_POSITIONS: "48"
+          AZ_MCTS_EVAL_SEARCHES: "64"
+          AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT: "0.0001"
         run: python ml/train_safe_export.py
       - name: Commit updated brain and browser model
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           bash scripts/stage_model_artifacts.sh ml/data/replay_buffer.json
-          git add public/nn ml/checkpoints ml/data/replay_buffer.json ml/data/fixed_eval_set_v2.json ml/training_history.json
+          git add public/nn ml/checkpoints ml/data/replay_buffer.json ml/data/fixed_eval_set_v3.json ml/training_history.json
           if git diff --cached --quiet; then
             echo "No model changes to commit"
             exit 0

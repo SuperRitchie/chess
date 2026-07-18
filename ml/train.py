@@ -13,6 +13,7 @@ import numpy as np
 import tensorflow as tf
 
 from features import PLANES, board_to_features
+from fen_utils import canonical_fen
 from policy_map import (
     LEGACY_POLICY_SIZE,
     POLICY_CHANNELS,
@@ -43,6 +44,8 @@ COLD_START_LR = float(os.environ.get("COLD_START_LR", "1e-3"))
 CONTINUE_LR = float(os.environ.get("CONTINUE_LR", "2e-4"))
 MIN_VALIDATION_IMPROVEMENT = float(os.environ.get("AZ_MIN_VALIDATION_IMPROVEMENT", "0.0001"))
 STOCKFISH_VALUE_WEIGHT = float(os.environ.get("AZ_STOCKFISH_VALUE_WEIGHT", "1.0"))
+STOCKFISH_POLICY_WEIGHT = float(os.environ.get("AZ_STOCKFISH_POLICY_WEIGHT", "1.0"))
+MERGE_FRESH_STOCKFISH_LABELS = os.environ.get("AZ_MERGE_FRESH_STOCKFISH_LABELS", "1") != "0"
 TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 
 random.seed(TRAIN_SEED)
@@ -65,6 +68,26 @@ def write_json(path: pathlib.Path, data) -> None:
     path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
 
 
+def normalize_sparse_policy(policy_items, fen: str, policy_version: int) -> list[list[float]]:
+    board = chess.Board(fen)
+    by_index = {}
+    for item in policy_items or []:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            continue
+        try:
+            index = normalize_policy_index(int(item[0]), board, policy_version)
+            probability = float(item[1])
+        except (TypeError, ValueError):
+            continue
+        if probability > 0 and np.isfinite(probability):
+            by_index[index] = by_index.get(index, 0.0) + probability
+
+    total = sum(by_index.values())
+    if total <= 0:
+        return []
+    return [[index, probability / total] for index, probability in sorted(by_index.items())]
+
+
 def normalize_labels(items: list[dict]) -> list[dict]:
     normalized = []
     for item in items:
@@ -72,22 +95,38 @@ def normalize_labels(items: list[dict]) -> list[dict]:
         if not fen:
             continue
         try:
+            fen = canonical_fen(fen)
             cp = float(item.get("cp", 0.0))
+            policy_version = int(item.get("policy_version", 1))
         except (TypeError, ValueError):
             continue
-        normalized.append({"fen": fen, "cp": cp})
+        policy = normalize_sparse_policy(item.get("policy"), fen, policy_version)
+        normalized.append(
+            {
+                "fen": fen,
+                "cp": cp,
+                "policy_version": POLICY_VERSION if policy else policy_version,
+                "policy": policy,
+            }
+        )
     return normalized
 
 
-def merge_stockfish_replay_buffer(new_items: list[dict]) -> list[dict]:
+def merge_stockfish_replay_buffer(new_items: list[dict]) -> tuple[list[dict], int]:
     existing_items = normalize_labels(read_json_list(STOCKFISH_REPLAY_BUFFER))
     new_items = normalize_labels(new_items)
 
-    by_fen = {item["fen"]: item for item in existing_items}
-    for item in new_items:
+    existing_by_fen = {item["fen"]: item for item in existing_items}
+    new_by_fen = {item["fen"]: item for item in new_items}
+    novel_count = sum(fen not in existing_by_fen for fen in new_by_fen)
+    by_fen = dict(existing_by_fen)
+    for fen, item in list(new_by_fen.items()):
+        existing = by_fen.get(item["fen"])
+        if existing and existing.get("policy") and not item.get("policy"):
+            item = {**item, "policy_version": existing["policy_version"], "policy": existing["policy"]}
+        new_by_fen[fen] = item
         by_fen[item["fen"]] = item
 
-    new_by_fen = {item["fen"]: item for item in new_items}
     if len(new_by_fen) >= MAX_REPLAY_ITEMS:
         merged = list(new_by_fen.values())
         random.shuffle(merged)
@@ -100,8 +139,12 @@ def merge_stockfish_replay_buffer(new_items: list[dict]) -> list[dict]:
 
     random.shuffle(merged)
     write_json(STOCKFISH_REPLAY_BUFFER, merged)
-    print(f"[train] Stockfish replay buffer {len(merged)} positions, new {len(new_items)}")
-    return merged
+    policy_count = sum(bool(item.get("policy")) for item in merged)
+    print(
+        f"[train] Stockfish replay buffer {len(merged)} positions, "
+        f"incoming {len(new_by_fen)}, truly new {novel_count}, policy targets {policy_count}"
+    )
+    return merged, novel_count
 
 
 def cp_to_value(cp: float) -> float:
@@ -155,19 +198,29 @@ def load_self_play_samples(excluded_fens: set[str] | None = None):
 
 def load_stockfish_samples(excluded_fens: set[str] | None = None):
     excluded_fens = excluded_fens or set()
-    fresh_items = normalize_labels(read_json_list(LABELS))
-    all_items = merge_stockfish_replay_buffer(fresh_items)
+    fresh_items = normalize_labels(read_json_list(LABELS)) if MERGE_FRESH_STOCKFISH_LABELS else []
+    all_items, novel_count = merge_stockfish_replay_buffer(fresh_items)
     items = [item for item in all_items if item["fen"] not in excluded_fens][-MAX_STOCKFISH_TRAIN:]
-    X, values = [], []
+    X, policies, values, policy_weights = [], [], [], []
     for item in items:
         X.append(board_to_features(item["fen"]))
+        policy = dense_policy_from_sparse(
+            item.get("policy"),
+            fen=item["fen"],
+            policy_version=int(item.get("policy_version", POLICY_VERSION)),
+        )
+        policies.append(policy)
+        policy_weights.append(STOCKFISH_POLICY_WEIGHT if float(np.sum(policy)) > 0 else 0.0)
         values.append(cp_to_value(float(item["cp"])))
-    return X, values, len(fresh_items), len(items)
+    print(f"[train] using {sum(weight > 0 for weight in policy_weights)} Stockfish policy targets")
+    return X, policies, values, policy_weights, novel_count, len(items)
 
 
 def load_dataset(excluded_fens: set[str] | None = None):
     self_X, self_policy, self_value = load_self_play_samples(excluded_fens)
-    stock_X, stock_value, fresh_count, stockfish_count = load_stockfish_samples(excluded_fens)
+    stock_X, stock_policy, stock_value, stock_policy_weights, fresh_count, stockfish_count = load_stockfish_samples(
+        excluded_fens
+    )
 
     X = []
     policy_y = []
@@ -182,12 +235,16 @@ def load_dataset(excluded_fens: set[str] | None = None):
         policy_weights.append(1.0)
         value_weights.append(1.0)
 
-    zero_policy = np.zeros((POLICY_SIZE,), dtype=np.float32)
-    for features, value in zip(stock_X, stock_value):
+    for features, policy, value, policy_weight in zip(
+        stock_X,
+        stock_policy,
+        stock_value,
+        stock_policy_weights,
+    ):
         X.append(features)
-        policy_y.append(zero_policy.copy())
+        policy_y.append(policy)
         value_y.append(value)
-        policy_weights.append(0.0)
+        policy_weights.append(policy_weight)
         value_weights.append(STOCKFISH_VALUE_WEIGHT)
 
     if not X:
