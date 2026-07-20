@@ -12,8 +12,44 @@ import {
   hasAnyLegalMove,
 } from "./chessRules";
 import { pickRandomMove } from "./randomAI";
-import { pickMCTSMove } from "./mctsAI";
-import { pickNNMove } from "./nnAI";
+
+let mctsModulePromise = null;
+let nnModulePromise = null;
+
+function loadMCTSModule() {
+  if (!mctsModulePromise) {
+    mctsModulePromise = import("./ai/mctsAI").catch((error) => {
+      mctsModulePromise = null;
+      throw error;
+    });
+  }
+  return mctsModulePromise;
+}
+
+function loadNNModule() {
+  if (!nnModulePromise) {
+    nnModulePromise = import("./ai/nnAI").catch((error) => {
+      nnModulePromise = null;
+      throw error;
+    });
+  }
+  return nnModulePromise;
+}
+
+function preloadAIMode(mode, warmModel = false) {
+  let preload = null;
+  if (mode === "mcts") {
+    preload = warmModel
+      ? Promise.all([loadMCTSModule(), loadNNModule()]).then(([, nn]) => nn.warmNNModel())
+      : loadMCTSModule();
+  } else if (mode === "nn") {
+    preload = warmModel ? loadNNModule().then((nn) => nn.warmNNModel()) : loadNNModule();
+  }
+
+  preload?.catch((error) => {
+    console.warn("AI preload failed", error);
+  });
+}
 
 const initPiece = (color, type) => ({ color, type, hasMoved: false });
 
@@ -448,19 +484,25 @@ export default function ChessBoard() {
     setIsThinking(true);
 
     let aiMove = null;
-    if (mode === "random") {
-      aiMove = await pickRandomMove(pieces, color, enPassantTarget);
-    } else if (mode === "mcts") {
-      aiMove = await pickMCTSMove(pieces, color, enPassantTarget, {
-        timeMs: 2000,
-        maxIterations: 4096,
-        batchSize: 16,
-      });
-    } else if (mode === "nn") {
-      aiMove = await pickNNMove(pieces, color, enPassantTarget);
+    try {
+      if (mode === "random") {
+        aiMove = await pickRandomMove(pieces, color, enPassantTarget);
+      } else if (mode === "mcts") {
+        const { pickMCTSMove } = await loadMCTSModule();
+        aiMove = await pickMCTSMove(pieces, color, enPassantTarget, {
+          timeMs: 2000,
+          maxIterations: 4096,
+          batchSize: 16,
+        });
+      } else if (mode === "nn") {
+        const { pickNNMove } = await loadNNModule();
+        aiMove = await pickNNMove(pieces, color, enPassantTarget);
+      }
+    } catch (error) {
+      console.warn("AI move failed", error);
+    } finally {
+      setIsThinking(false);
     }
-
-    setIsThinking(false);
     if (!aiMove) return;
 
     // snapshot for undo BEFORE AI move
@@ -570,7 +612,12 @@ export default function ChessBoard() {
                 <button
                   key={m.key}
                   className={`seg-btn ${whiteMode === m.key ? "is-active" : ""}`}
-                  onClick={() => setWhiteMode(m.key)}
+                  onPointerEnter={() => preloadAIMode(m.key)}
+                  onFocus={() => preloadAIMode(m.key)}
+                  onClick={() => {
+                    preloadAIMode(m.key, true);
+                    setWhiteMode(m.key);
+                  }}
                   disabled={isThinking || frozenForPromotion}
                   type="button"
                 >
@@ -589,7 +636,12 @@ export default function ChessBoard() {
                 <button
                   key={m.key}
                   className={`seg-btn ${blackMode === m.key ? "is-active" : ""}`}
-                  onClick={() => setBlackMode(m.key)}
+                  onPointerEnter={() => preloadAIMode(m.key)}
+                  onFocus={() => preloadAIMode(m.key)}
+                  onClick={() => {
+                    preloadAIMode(m.key, true);
+                    setBlackMode(m.key);
+                  }}
                   disabled={isThinking || frozenForPromotion}
                   type="button"
                 >
