@@ -15,6 +15,7 @@ from policy_map import POLICY_SIZE, POLICY_VERSION, move_to_index
 
 CHECKPOINT_MODEL = pathlib.Path("ml/checkpoints/chess_eval.keras")
 SELF_PLAY_BUFFER = pathlib.Path("ml/data/self_play_buffer.json")
+STOCKFISH_REPLAY_BUFFER = pathlib.Path("ml/data/replay_buffer.json")
 
 SELF_PLAY_GAMES = int(os.environ.get("AZ_SELF_PLAY_GAMES", "4"))
 SELF_PLAY_BATCH_SIZE = int(os.environ.get("AZ_SELF_PLAY_BATCH_SIZE", "4"))
@@ -27,6 +28,8 @@ DIRICHLET_EPSILON = float(os.environ.get("AZ_DIRICHLET_EPSILON", "0.25"))
 TEMP_MOVES = int(os.environ.get("AZ_TEMP_MOVES", "20"))
 TEMPERATURE = float(os.environ.get("AZ_TEMPERATURE", "1.0"))
 SEED = int(os.environ.get("AZ_SELF_PLAY_SEED", "42")) % (2**32 - 1)
+START_POSITION_FRACTION = float(os.environ.get("AZ_START_POSITION_FRACTION", "0.5"))
+START_POSITION_MAX_CP = float(os.environ.get("AZ_START_POSITION_MAX_CP", "150"))
 
 
 def seed_everything(seed=SEED):
@@ -58,6 +61,35 @@ def read_json_list(path):
 def write_json(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, separators=(",", ":")), encoding="utf-8")
+
+
+def load_balanced_start_fens(path=STOCKFISH_REPLAY_BUFFER):
+    candidates = []
+    for item in read_json_list(path):
+        fen = item.get("fen")
+        try:
+            cp = abs(float(item.get("cp", 0.0)))
+            board = chess.Board(fen)
+        except (TypeError, ValueError):
+            continue
+        if cp > START_POSITION_MAX_CP or board.is_game_over(claim_draw=True):
+            continue
+        if len(board.piece_map()) < 10:
+            continue
+        candidates.append(board.fen(en_passant="fen"))
+
+    candidates = sorted(set(candidates))
+    random.Random(SEED).shuffle(candidates)
+    return candidates
+
+
+def board_for_self_play_game(game_index, start_fens):
+    use_start = start_fens and START_POSITION_FRACTION > 0 and (
+        ((game_index * 37) % 100) / 100 < min(1.0, START_POSITION_FRACTION)
+    )
+    if not use_start:
+        return chess.Board()
+    return chess.Board(start_fens[(SEED + game_index) % len(start_fens)])
 
 
 def is_compatible_model(model) -> bool:
@@ -276,9 +308,13 @@ def result_for_white(board):
     return 1.0 if outcome.winner == chess.WHITE else -1.0
 
 
-def play_games(model, first_game_index, game_count):
+def play_games(model, first_game_index, game_count, start_fens=None):
     games = [
-        {"board": chess.Board(), "samples": [], "game_index": first_game_index + offset}
+        {
+            "board": board_for_self_play_game(first_game_index + offset, start_fens or []),
+            "samples": [],
+            "game_index": first_game_index + offset,
+        }
         for offset in range(game_count)
     ]
     for ply in range(MAX_PLIES):
@@ -312,9 +348,18 @@ def play_games(model, first_game_index, game_count):
     for game in games:
         board = game["board"]
         samples = game["samples"]
+        outcome = board.outcome(claim_draw=True)
+        if outcome is None:
+            print(
+                f"[self-play] game {game['game_index'] + 1}: "
+                f"discarded {len(samples)} plies because the game hit the ply limit"
+            )
+            completed_samples.append([])
+            continue
         white_result = result_for_white(board)
         for sample in samples:
             sample["z"] = white_result if sample["turn"] == "white" else -white_result
+            sample["termination"] = outcome.termination.name.lower()
         print(
             f"[self-play] game {game['game_index'] + 1}: "
             f"{len(samples)} plies, result {board.result(claim_draw=True)}"
@@ -327,8 +372,16 @@ def play_game(model, game_index):
     return play_games(model, game_index, 1)[0]
 
 
-def play_arena_game(candidate, baseline, candidate_is_white, searches=24, max_plies=160, opening=None):
-    board = chess.Board()
+def play_arena_game(
+    candidate,
+    baseline,
+    candidate_is_white,
+    searches=24,
+    max_plies=160,
+    opening=None,
+    start_fen=None,
+):
+    board = chess.Board(start_fen) if start_fen else chess.Board()
     for uci in opening or []:
         move = chess.Move.from_uci(uci)
         if move not in board.legal_moves:
@@ -354,7 +407,7 @@ def play_arena_game(candidate, baseline, candidate_is_white, searches=24, max_pl
     return 1.0 if outcome.winner == candidate_color else 0.0
 
 
-def arena_score(candidate, baseline, games=2, searches=24, max_plies=160):
+def arena_score(candidate, baseline, games=2, searches=24, max_plies=160, start_fens=None):
     openings = (
         ("e2e4", "e7e5"),
         ("d2d4", "d7d5"),
@@ -368,7 +421,12 @@ def arena_score(candidate, baseline, games=2, searches=24, max_plies=160):
     scores = []
     for game_index in range(max(0, games)):
         candidate_is_white = game_index % 2 == 0
-        opening = openings[(game_index // 2) % len(openings)]
+        start_fen = None
+        opening = None
+        if start_fens:
+            start_fen = start_fens[(game_index // 2) % len(start_fens)]
+        else:
+            opening = openings[(game_index // 2) % len(openings)]
         score = play_arena_game(
             candidate,
             baseline,
@@ -376,22 +434,35 @@ def arena_score(candidate, baseline, games=2, searches=24, max_plies=160):
             searches=searches,
             max_plies=max_plies,
             opening=opening,
+            start_fen=start_fen,
         )
         scores.append(score)
         print(f"[arena] game {game_index + 1}/{games}: candidate score {score:.1f}")
-    return float(np.mean(scores)) if scores else 1.0
+    wins = sum(score == 1.0 for score in scores)
+    draws = sum(score == 0.5 for score in scores)
+    losses = sum(score == 0.0 for score in scores)
+    return {
+        "score": float(np.mean(scores)) if scores else 1.0,
+        "wins": wins,
+        "draws": draws,
+        "losses": losses,
+        "decisive_games": wins + losses,
+        "start_positions": len(set(start_fens or [])),
+    }
 
 
 def main():
     seed_everything()
     model = load_model_or_none()
     existing = read_json_list(SELF_PLAY_BUFFER)
+    start_fens = load_balanced_start_fens()
+    print(f"[self-play] loaded {len(start_fens)} balanced start positions")
     new_samples = []
 
     batch_size = max(1, SELF_PLAY_BATCH_SIZE)
     for first_game_index in range(0, SELF_PLAY_GAMES, batch_size):
         game_count = min(batch_size, SELF_PLAY_GAMES - first_game_index)
-        for samples in play_games(model, first_game_index, game_count):
+        for samples in play_games(model, first_game_index, game_count, start_fens=start_fens):
             new_samples.extend(samples)
 
     merged = existing + new_samples

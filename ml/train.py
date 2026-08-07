@@ -174,7 +174,7 @@ def dense_policy_from_sparse(policy_items, fen: str | None = None, policy_versio
 def load_self_play_samples(excluded_fens: set[str] | None = None):
     excluded_fens = excluded_fens or set()
     items = read_json_list(SELF_PLAY_BUFFER)[-MAX_SELF_PLAY_TRAIN:]
-    X, policies, values = [], [], []
+    X, policies, values, value_weights = [], [], [], []
     for item in items:
         fen = item.get("fen")
         if not fen or fen in excluded_fens:
@@ -193,7 +193,12 @@ def load_self_play_samples(excluded_fens: set[str] | None = None):
         X.append(board_to_features(fen))
         policies.append(policy)
         values.append(np.clip(outcome, -1.0, 1.0))
-    return X, policies, values
+        value_weights.append(1.0 if outcome != 0.0 or item.get("termination") else 0.0)
+    print(
+        f"[train] using {sum(weight > 0 for weight in value_weights)} verified "
+        f"self-play value targets from {len(value_weights)} policy samples"
+    )
+    return X, policies, values, value_weights
 
 
 def load_stockfish_samples(excluded_fens: set[str] | None = None):
@@ -217,7 +222,7 @@ def load_stockfish_samples(excluded_fens: set[str] | None = None):
 
 
 def load_dataset(excluded_fens: set[str] | None = None):
-    self_X, self_policy, self_value = load_self_play_samples(excluded_fens)
+    self_X, self_policy, self_value, self_value_weights = load_self_play_samples(excluded_fens)
     stock_X, stock_policy, stock_value, stock_policy_weights, fresh_count, stockfish_count = load_stockfish_samples(
         excluded_fens
     )
@@ -228,12 +233,17 @@ def load_dataset(excluded_fens: set[str] | None = None):
     policy_weights = []
     value_weights = []
 
-    for features, policy, value in zip(self_X, self_policy, self_value):
+    for features, policy, value, value_weight in zip(
+        self_X,
+        self_policy,
+        self_value,
+        self_value_weights,
+    ):
         X.append(features)
         policy_y.append(policy)
         value_y.append(value)
         policy_weights.append(1.0)
-        value_weights.append(1.0)
+        value_weights.append(value_weight)
 
     for features, policy, value, policy_weight in zip(
         stock_X,

@@ -15,6 +15,17 @@ const PIECE_VALUES = {
   king: 0,
 };
 
+const PHASE_VALUES = {
+  pawn: 0,
+  knight: 1,
+  bishop: 1,
+  rook: 2,
+  queen: 4,
+  king: 0,
+};
+
+const TOTAL_PHASE = 24;
+
 const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
 const opponent = (color) => (color === 'white' ? 'black' : 'white');
 const key = (x, y) => `${x}-${y}`;
@@ -31,7 +42,7 @@ function undevelopedMinorCount(pieces, color) {
   }).length;
 }
 
-function piecePositionScore(pieces, piece, x, y, undeveloped) {
+function piecePositionScore(pieces, piece, x, y, undeveloped, endgameWeight) {
   const homeRow = piece.color === 'white' ? 7 : 0;
   const pawnRow = piece.color === 'white' ? 6 : 1;
   const advance = Math.abs(pawnRow - x);
@@ -46,7 +57,7 @@ function piecePositionScore(pieces, piece, x, y, undeveloped) {
     if (y === 5 && advance > 0 && king?.type === 'king' && !king.hasMoved) {
       score -= advance * 28;
     }
-    return score;
+    return score + advance * 18 * endgameWeight;
   }
 
   if (piece.type === 'knight') {
@@ -68,11 +79,81 @@ function piecePositionScore(pieces, piece, x, y, undeveloped) {
   }
 
   if (piece.type === 'king') {
-    if (x === homeRow && (y === 2 || y === 6)) return 38;
-    if (piece.hasMoved && (x !== homeRow || y !== 4)) return -24;
+    let middleGameScore = 0;
+    if (x === homeRow && (y === 2 || y === 6)) middleGameScore = 38;
+    else if (piece.hasMoved && (x !== homeRow || y !== 4)) middleGameScore = -24;
+    const endgameScore = centrality(x, y) * 9;
+    return middleGameScore * (1 - endgameWeight) + endgameScore * endgameWeight;
   }
 
   return 0;
+}
+
+function pawnStructureScore(pieces, pawns, color, endgameWeight) {
+  const enemy = opponent(color);
+  const fileCounts = Array(8).fill(0);
+  pawns.forEach(({ y }) => { fileCounts[y] += 1; });
+  let score = 0;
+
+  for (const pawn of pawns) {
+    const hasNeighbor = (pawn.y > 0 && fileCounts[pawn.y - 1] > 0) ||
+      (pawn.y < 7 && fileCounts[pawn.y + 1] > 0);
+    if (!hasNeighbor) score -= 14;
+
+    const direction = color === 'white' ? -1 : 1;
+    let blockedByPawn = false;
+    for (let x = pawn.x + direction; x >= 0 && x < 8 && !blockedByPawn; x += direction) {
+      for (let y = Math.max(0, pawn.y - 1); y <= Math.min(7, pawn.y + 1); y += 1) {
+        const piece = getPiece(pieces, x, y);
+        if (piece?.type === 'pawn' && piece.color === enemy) {
+          blockedByPawn = true;
+          break;
+        }
+      }
+    }
+
+    if (!blockedByPawn) {
+      const advance = color === 'white' ? 6 - pawn.x : pawn.x - 1;
+      const passedBonuses = [0, 6, 14, 28, 48, 78, 125];
+      score += passedBonuses[clamp(advance, 0, 6)] * (0.65 + 0.7 * endgameWeight);
+      const supportRow = pawn.x - direction;
+      const protectedByPawn = [pawn.y - 1, pawn.y + 1].some((file) => {
+        const piece = getPiece(pieces, supportRow, file);
+        return piece?.type === 'pawn' && piece.color === color;
+      });
+      if (protectedByPawn) score += 16;
+    }
+  }
+
+  fileCounts.forEach((count) => {
+    if (count > 1) score -= (count - 1) * 12;
+  });
+  return score;
+}
+
+function kingSafetyScore(pieces, king, color, endgameWeight) {
+  if (!king) return 0;
+  const direction = color === 'white' ? -1 : 1;
+  const shieldRow = king.x + direction;
+  let shield = 0;
+  for (let file = Math.max(0, king.y - 1); file <= Math.min(7, king.y + 1); file += 1) {
+    const piece = getPiece(pieces, shieldRow, file);
+    if (piece?.type === 'pawn' && piece.color === color) shield += 1;
+  }
+  return (shield * 13 - (3 - shield) * 10) * (1 - endgameWeight);
+}
+
+function mopUpScore(kings, material, endgameWeight) {
+  const advantage = material.white - material.black;
+  if (Math.abs(advantage) < 180 || !kings.white || !kings.black) return 0;
+  const winner = advantage > 0 ? 'white' : 'black';
+  const loser = opponent(winner);
+  const losingKing = kings[loser];
+  const winningKing = kings[winner];
+  const edgePressure = 7 - centrality(losingKing.x, losingKing.y);
+  const kingDistance = Math.abs(losingKing.x - winningKing.x) + Math.abs(losingKing.y - winningKing.y);
+  const score = (edgePressure * 8 + (14 - kingDistance) * 4) * endgameWeight;
+  return winner === 'white' ? score : -score;
 }
 
 function positionScoreCp(pieces, color) {
@@ -81,23 +162,42 @@ function positionScoreCp(pieces, color) {
     black: undevelopedMinorCount(pieces, 'black'),
   };
   const bishops = { white: 0, black: 0 };
+  const pawns = { white: [], black: [] };
+  const kings = { white: null, black: null };
+  const material = { white: 0, black: 0 };
+  const locatedPieces = [];
+  let phase = 0;
   let whiteScore = 0;
 
   for (let x = 0; x < 8; x += 1) {
     for (let y = 0; y < 8; y += 1) {
       const piece = getPiece(pieces, x, y);
       if (!piece) continue;
-      const sign = piece.color === 'white' ? 1 : -1;
-      whiteScore += sign * (
-        PIECE_VALUES[piece.type] +
-        piecePositionScore(pieces, piece, x, y, undeveloped[piece.color])
-      );
+      locatedPieces.push({ piece, x, y });
+      phase += PHASE_VALUES[piece.type];
+      material[piece.color] += PIECE_VALUES[piece.type];
       if (piece.type === 'bishop') bishops[piece.color] += 1;
+      if (piece.type === 'pawn') pawns[piece.color].push({ x, y });
+      if (piece.type === 'king') kings[piece.color] = { x, y };
     }
   }
 
+  const endgameWeight = 1 - clamp(phase / TOTAL_PHASE, 0, 1);
+  locatedPieces.forEach(({ piece, x, y }) => {
+    const sign = piece.color === 'white' ? 1 : -1;
+    whiteScore += sign * (
+      PIECE_VALUES[piece.type] +
+      piecePositionScore(pieces, piece, x, y, undeveloped[piece.color], endgameWeight)
+    );
+  });
+
   if (bishops.white >= 2) whiteScore += 18;
   if (bishops.black >= 2) whiteScore -= 18;
+  whiteScore += pawnStructureScore(pieces, pawns.white, 'white', endgameWeight);
+  whiteScore -= pawnStructureScore(pieces, pawns.black, 'black', endgameWeight);
+  whiteScore += kingSafetyScore(pieces, kings.white, 'white', endgameWeight);
+  whiteScore -= kingSafetyScore(pieces, kings.black, 'black', endgameWeight);
+  whiteScore += mopUpScore(kings, material, endgameWeight);
   if (isKingInCheck(pieces, 'white')) whiteScore -= 45;
   if (isKingInCheck(pieces, 'black')) whiteScore += 45;
 
@@ -106,6 +206,139 @@ function positionScoreCp(pieces, color) {
 
 export function evaluatePosition(pieces, color) {
   return Math.tanh(positionScoreCp(pieces, color) / 650);
+}
+
+export function positionKey(pieces, color, enPassantTarget = null) {
+  const board = Object.keys(pieces).sort().map((square) => {
+    const piece = pieces[square];
+    return `${square}:${piece.color}:${piece.type}:${piece.hasMoved ? 1 : 0}`;
+  }).join('|');
+  const enPassant = enPassantTarget ? `${enPassantTarget.x}-${enPassantTarget.y}` : '-';
+  return `${color}:${enPassant}:${board}`;
+}
+
+function moveDetails(pieces, move, color, enPassantTarget) {
+  const mover = getPiece(pieces, move.from.x, move.from.y);
+  let captured = getPiece(pieces, move.to.x, move.to.y);
+  if (!captured && mover?.type === 'pawn' && move.from.y !== move.to.y) {
+    captured = getPiece(pieces, move.from.x, move.to.y);
+  }
+  const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
+  const result = makeMove(pieces, move.from, move.to, promotion, enPassantTarget);
+  const givesCheck = isKingInCheck(result.pieces, opponent(color));
+  const captureValue = captured ? PIECE_VALUES[captured.type] : 0;
+  const moverValue = mover ? PIECE_VALUES[mover.type] : 0;
+  let priority = captureValue * 12 - moverValue;
+  if (promotion) priority += PIECE_VALUES[promotion] + 500;
+  if (givesCheck) priority += 280;
+  priority += positionScoreCp(result.pieces, color) * 0.02;
+  return { move: { ...move, promotionType: promotion }, result, givesCheck, captureValue, priority };
+}
+
+export function orderMoves(pieces, moves, color, enPassantTarget = null, preferredMove = null) {
+  const preferred = preferredMove ? `${preferredMove.from.x}-${preferredMove.from.y}:${preferredMove.to.x}-${preferredMove.to.y}:${preferredMove.promotionType || ''}` : null;
+  return moves.map((move) => {
+    const details = moveDetails(pieces, move, color, enPassantTarget);
+    const id = `${details.move.from.x}-${details.move.from.y}:${details.move.to.x}-${details.move.to.y}:${details.move.promotionType || ''}`;
+    return { ...details, priority: details.priority + (id === preferred ? 1000000 : 0) };
+  }).sort((first, second) => second.priority - first.priority);
+}
+
+function quiescence(pieces, color, enPassantTarget, depth, alpha, beta, extensionBudget, context) {
+  if (Date.now() >= context.deadline || context.nodes >= context.maxNodes) {
+    return evaluatePosition(pieces, color);
+  }
+  context.nodes += 1;
+
+  const cacheKey = `${positionKey(pieces, color, enPassantTarget)}:${depth}:${extensionBudget}`;
+  const cached = context.cache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
+  const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
+  if (legalMoves.length === 0) return isKingInCheck(pieces, color) ? -1 : 0;
+
+  const inCheck = isKingInCheck(pieces, color);
+  const standPat = evaluatePosition(pieces, color);
+  if (depth <= 0 && (!inCheck || extensionBudget <= 0)) return standPat;
+
+  let best = inCheck ? -1 : standPat;
+  if (!inCheck) {
+    if (best >= beta) return best;
+    alpha = Math.max(alpha, best);
+  }
+
+  let ordered = orderMoves(pieces, legalMoves, color, enPassantTarget);
+  if (!inCheck) {
+    ordered = ordered.filter((item) => item.captureValue > 0 || item.move.promotionType || item.givesCheck);
+    ordered = ordered.slice(0, context.maxMoves);
+  }
+  if (ordered.length === 0) return standPat;
+
+  let completed = true;
+  for (const item of ordered) {
+    const nextExtensionBudget = inCheck && depth <= 0 ? extensionBudget - 1 : extensionBudget;
+    const score = -quiescence(
+      item.result.pieces,
+      opponent(color),
+      item.result.nextEnPassant,
+      depth - 1,
+      -beta,
+      -alpha,
+      nextExtensionBudget,
+      context,
+    );
+    best = Math.max(best, score);
+    alpha = Math.max(alpha, best);
+    if (alpha >= beta || Date.now() >= context.deadline || context.nodes >= context.maxNodes) {
+      completed = false;
+      break;
+    }
+  }
+
+  if (completed) context.cache.set(cacheKey, best);
+  return best;
+}
+
+export function tacticalSearch(
+  pieces,
+  color,
+  enPassantTarget = null,
+  {
+    depth = 2,
+    extensionBudget = 1,
+    maxMoves = 6,
+    maxNodes = 600,
+    deadline = Infinity,
+    cache = new Map(),
+  } = {},
+) {
+  const context = { cache, deadline, maxMoves, maxNodes, nodes: 0 };
+  return quiescence(
+    pieces,
+    color,
+    enPassantTarget,
+    Math.max(0, depth),
+    -1,
+    1,
+    Math.max(0, extensionBudget),
+    context,
+  );
+}
+
+export function tacticalScoreForMove(
+  pieces,
+  move,
+  color,
+  enPassantTarget = null,
+  options = {},
+) {
+  const details = moveDetails(pieces, move, color, enPassantTarget);
+  return -tacticalSearch(
+    details.result.pieces,
+    opponent(color),
+    details.result.nextEnPassant,
+    options,
+  );
 }
 
 export function scoreMove(pieces, move, color, enPassantTarget = null) {

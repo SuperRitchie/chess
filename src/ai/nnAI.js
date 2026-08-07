@@ -1,6 +1,10 @@
 import * as tf from '@tensorflow/tfjs';
 import { listLegalMoves, makeMove, getPiece, isKingInCheck } from '../rules/chessRules';
-import { rankMoves, stabilizePolicyValue } from './chessHeuristics';
+import {
+  rankMoves,
+  stabilizePolicyValue,
+  tacticalSearch,
+} from './chessHeuristics';
 
 export const POLICY_CHANNELS = 5;
 export const POLICY_SIZE = 64 * 64 * POLICY_CHANNELS;
@@ -220,8 +224,12 @@ export async function pickNNMove(
   depth = 2,
   {
     predictBatch = predictPolicyValueBatchForPositions,
-    rootMoveLimit = 12,
-    replyLimit = 10,
+    rootMoveLimit = 14,
+    replyLimit = 12,
+    tacticalCandidates = 6,
+    tacticalDepth = 2,
+    tacticalTimeMs = 700,
+    tacticalWeight = 0.45,
   } = {},
 ) {
   const [rawRoot] = await predictBatch([{ pieces, color, enPassantTarget }]);
@@ -287,14 +295,38 @@ export async function pickNNMove(
     });
   }
 
-  const best = candidates.reduce((current, candidate) => {
+  const scoredCandidates = candidates.map((candidate) => {
     const moveId = moveKey(candidate.move);
     const priorBonus = 0.1 * (rootPrediction.priors.get(moveId) || 0);
     const positionalBonus = 0.04 * (rootPrediction.moveScores.get(moveId) || 0);
-    const score = candidate.score + priorBonus + positionalBonus;
-    if (!current || score > current.score) return { candidate, score };
-    return current;
-  }, null);
+    return { candidate, score: candidate.score + priorBonus + positionalBonus };
+  }).sort((first, second) => second.score - first.score);
+
+  const tacticalDeadline = Date.now() + Math.max(1, tacticalTimeMs);
+  const tacticalCache = new Map();
+  const verifyCount = Math.min(Math.max(1, tacticalCandidates), scoredCandidates.length);
+  for (let index = 0; index < verifyCount; index += 1) {
+    const item = scoredCandidates[index];
+    const tacticalScore = -tacticalSearch(
+      item.candidate.pieces,
+      nextColor,
+      item.candidate.nextEnPassant,
+      {
+        depth: tacticalDepth,
+        extensionBudget: 1,
+        maxMoves: 6,
+        maxNodes: 700,
+        deadline: tacticalDeadline,
+        cache: tacticalCache,
+      },
+    );
+    item.score = (1 - tacticalWeight) * item.score + tacticalWeight * tacticalScore;
+  }
+
+  const best = scoredCandidates.reduce(
+    (current, item) => (!current || item.score > current.score ? item : current),
+    null,
+  );
 
   return best?.candidate.move || null;
 }

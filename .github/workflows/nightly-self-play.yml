@@ -31,23 +31,28 @@ jobs:
         run: python -m unittest discover -s ml/tests -p "test_*.py"
       - name: Generate neural MCTS self-play games
         env:
-          AZ_SELF_PLAY_GAMES: "24"
+          AZ_SELF_PLAY_GAMES: "32"
           AZ_SELF_PLAY_BATCH_SIZE: "8"
-          AZ_MCTS_SEARCHES: "128"
-          AZ_MAX_SELF_PLAY_SAMPLES: "50000"
+          AZ_MCTS_SEARCHES: "160"
+          AZ_MAX_SELF_PLAY_SAMPLES: "60000"
+          AZ_START_POSITION_FRACTION: "0.50"
+          AZ_START_POSITION_MAX_CP: "150"
           AZ_SELF_PLAY_SEED: ${{ github.run_number }}
         run: python ml/self_play.py
       - name: Continue policy-value learning, evaluate, and export model
         env:
           TRAIN_SEED: ${{ github.run_number }}
-          AZ_MAX_SELF_PLAY_TRAIN: "16000"
-          AZ_MAX_STOCKFISH_TRAIN: "24000"
+          AZ_MAX_SELF_PLAY_TRAIN: "24000"
+          AZ_MAX_STOCKFISH_TRAIN: "32000"
           AZ_STOCKFISH_POLICY_WEIGHT: "1.0"
           AZ_MERGE_FRESH_STOCKFISH_LABELS: "0"
           CONTINUE_EPOCHS: "4"
-          AZ_ARENA_GAMES: "16"
-          AZ_ARENA_SEARCHES: "64"
-          AZ_ARENA_MIN_SCORE: "0.55"
+          AZ_ARENA_GAMES: "48"
+          AZ_ARENA_SEARCHES: "48"
+          AZ_ARENA_MAX_PLIES: "120"
+          AZ_ARENA_MIN_SCORE: "0.50"
+          AZ_ARENA_MIN_DECISIVE_GAMES: "8"
+          AZ_ARENA_MAX_START_CP: "150"
           AZ_MCTS_EVAL_POSITIONS: "192"
           AZ_MCTS_EVAL_SEARCHES: "64"
           AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT: "0.0001"

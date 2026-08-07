@@ -4,7 +4,11 @@ import {
   predictPolicyValueBatchForPositions,
   predictPolicyValueForMoves,
 } from './nnAI';
-import { stabilizePolicyValue } from './chessHeuristics';
+import {
+  positionKey,
+  stabilizePolicyValue,
+  tacticalSearch,
+} from './chessHeuristics';
 
 const DEFAULT_CPUCT = 1.5;
 
@@ -113,52 +117,41 @@ function adjustVirtualVisits(node, amount) {
   }
 }
 
-async function evaluateAndExpand(node) {
-  const terminal = terminalValue(node.pieces, node.toMove, node.enPassantTarget);
-  if (terminal !== null) return terminal;
-
-  let prediction;
-  try {
-    prediction = await predictPolicyValueForMoves(
-      node.pieces,
-      node.toMove,
-      node.enPassantTarget,
-    );
-  } catch (error) {
-    console.warn('Neural MCTS inference failed; using uniform priors.', error);
-  }
-
-  const stabilized = stabilizePolicyValue(
-    node.pieces,
-    node.toMove,
-    node.enPassantTarget,
-    prediction || uniformPrediction(node.pieces, node.toMove, node.enPassantTarget),
-  );
-  const { value, priors, legalMoves } = stabilized;
-  node.expand(legalMoves, priors);
-  return Number.isFinite(value) ? value : 0;
+async function evaluateAndExpand(node, predictionCache) {
+  const [value] = await evaluateAndExpandBatch([node], predictionCache);
+  return value;
 }
 
-async function evaluateAndExpandBatch(nodes) {
+async function evaluateAndExpandBatch(nodes, predictionCache = new Map()) {
   const values = new Array(nodes.length);
-  const pending = [];
+  const pendingByKey = new Map();
 
   nodes.forEach((node, index) => {
     const terminal = terminalValue(node.pieces, node.toMove, node.enPassantTarget);
     if (terminal === null) {
-      pending.push({ node, index });
+      const key = positionKey(node.pieces, node.toMove, node.enPassantTarget);
+      const cached = predictionCache.get(key);
+      if (cached) {
+        node.expand(cached.legalMoves, cached.priors);
+        values[index] = Number.isFinite(cached.value) ? cached.value : 0;
+      } else {
+        if (!pendingByKey.has(key)) pendingByKey.set(key, []);
+        pendingByKey.get(key).push({ node, index });
+      }
     } else {
       values[index] = terminal;
     }
   });
 
-  if (pending.length === 0) return values;
+  const groups = [...pendingByKey.entries()];
+  if (groups.length === 0) return values;
+  const representatives = groups.map(([, items]) => items[0].node);
 
   let predictions;
   try {
     if (typeof predictPolicyValueBatchForPositions !== 'function') throw new Error('batch inference unavailable');
     predictions = await predictPolicyValueBatchForPositions(
-      pending.map(({ node }) => ({
+      representatives.map((node) => ({
         pieces: node.pieces,
         color: node.toMove,
         enPassantTarget: node.enPassantTarget,
@@ -166,7 +159,7 @@ async function evaluateAndExpandBatch(nodes) {
     );
   } catch (error) {
     predictions = await Promise.all(
-      pending.map(({ node }) => predictPolicyValueForMoves(
+      representatives.map((node) => predictPolicyValueForMoves(
         node.pieces,
         node.toMove,
         node.enPassantTarget,
@@ -174,7 +167,8 @@ async function evaluateAndExpandBatch(nodes) {
     );
   }
 
-  pending.forEach(({ node, index }, predictionIndex) => {
+  groups.forEach(([key, items], predictionIndex) => {
+    const node = items[0].node;
     const prediction = stabilizePolicyValue(
       node.pieces,
       node.toMove,
@@ -185,8 +179,11 @@ async function evaluateAndExpandBatch(nodes) {
         node.enPassantTarget,
       ),
     );
-    node.expand(prediction.legalMoves, prediction.priors);
-    values[index] = Number.isFinite(prediction.value) ? prediction.value : 0;
+    predictionCache.set(key, prediction);
+    items.forEach(({ node: pendingNode, index }) => {
+      pendingNode.expand(prediction.legalMoves, prediction.priors);
+      values[index] = Number.isFinite(prediction.value) ? prediction.value : 0;
+    });
   });
 
   return values;
@@ -196,10 +193,31 @@ export async function pickMCTSMove(
   pieces,
   color,
   enPassantTarget,
-  { timeMs = 2000, maxIterations = 4096, batchSize = 16, cpuct = DEFAULT_CPUCT } = {},
+  {
+    timeMs = 2000,
+    maxIterations = 4096,
+    batchSize = 16,
+    cpuct = DEFAULT_CPUCT,
+    tacticalCandidates = 8,
+    tacticalDepth = 2,
+    tacticalReserveMs = 350,
+    tacticalWeight = 0.45,
+  } = {},
 ) {
-  const root = new Node(null, clonePieces(pieces), color, enPassantTarget);
-  const rootValue = await evaluateAndExpand(root);
+  const predictionCache = new Map();
+  const rootPieces = clonePieces(pieces);
+  const legalRootMoves = listLegalMoves(rootPieces, color, enPassantTarget);
+  if (legalRootMoves.length === 0) return null;
+  for (const move of legalRootMoves) {
+    const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
+    const result = makeMove(rootPieces, move.from, move.to, promotion, enPassantTarget);
+    if (terminalValue(result.pieces, opponent(color), result.nextEnPassant) === -1) {
+      return { ...move, promotionType: promotion };
+    }
+  }
+
+  const root = new Node(null, rootPieces, color, enPassantTarget);
+  const rootValue = await evaluateAndExpand(root, predictionCache);
   root.visitCount = 1;
   root.valueSum = rootValue;
   if (root.children.length === 0) return null;
@@ -210,8 +228,9 @@ export async function pickMCTSMove(
   if (immediateMate) return immediateMate.move;
 
   const deadline = Date.now() + Math.max(1, timeMs);
+  const searchDeadline = deadline - Math.min(Math.max(0, tacticalReserveMs), timeMs / 2);
   let iterations = 0;
-  while (iterations < maxIterations && Date.now() < deadline) {
+  while (iterations < maxIterations && Date.now() < searchDeadline) {
     const selected = [];
     const currentBatchSize = Math.min(Math.max(1, batchSize), maxIterations - iterations);
 
@@ -227,7 +246,7 @@ export async function pickMCTSMove(
     }
     if (selected.length === 0) break;
 
-    const values = await evaluateAndExpandBatch(selected);
+    const values = await evaluateAndExpandBatch(selected, predictionCache);
     selected.forEach((node, index) => {
       adjustVirtualVisits(node, -1);
       node.backup(values[index]);
@@ -235,13 +254,42 @@ export async function pickMCTSMove(
     iterations += selected.length;
   }
 
-  const best = root.children.reduce((current, child) => {
+  const visitBest = root.children.reduce((current, child) => {
     if (!current) return child;
     if (child.visitCount !== current.visitCount) {
       return child.visitCount > current.visitCount ? child : current;
     }
     return child.meanValue < current.meanValue ? child : current;
   }, null);
+
+  const finalists = [...root.children]
+    .sort((first, second) => second.visitCount - first.visitCount)
+    .slice(0, Math.max(1, tacticalCandidates));
+  const tacticalCache = new Map();
+  const scored = finalists.map((child) => {
+    const tacticalScore = -tacticalSearch(
+      child.pieces,
+      child.toMove,
+      child.enPassantTarget,
+      {
+        depth: tacticalDepth,
+        extensionBudget: 1,
+        maxMoves: 6,
+        maxNodes: 700,
+        deadline,
+        cache: tacticalCache,
+      },
+    );
+    const searchScore = child.visitCount === 0 ? 0 : -child.meanValue;
+    return {
+      child,
+      score: (1 - tacticalWeight) * searchScore + tacticalWeight * tacticalScore,
+    };
+  });
+  const best = scored.reduce(
+    (current, item) => (!current || item.score > current.score ? item : current),
+    null,
+  )?.child || visitBest;
 
   return best?.move || null;
 }

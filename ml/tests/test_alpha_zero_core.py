@@ -114,6 +114,33 @@ class DataPipelineTests(unittest.TestCase):
         self.assertEqual({item["fen"] for item in merged}, {first_fen, second_fen})
         self.assertEqual(next(item for item in merged if item["fen"] == first_fen)["policy"], first_policy)
 
+    def test_legacy_zero_self_play_targets_do_not_train_the_value_head(self):
+        policy = [[policy_map.move_to_index(chess.Move.from_uci("e2e4")), 1.0]]
+        samples = [
+            {"fen": chess.STARTING_FEN, "policy_version": policy_map.POLICY_VERSION, "policy": policy, "z": 0},
+            {
+                "fen": chess.STARTING_FEN,
+                "policy_version": policy_map.POLICY_VERSION,
+                "policy": policy,
+                "z": 0,
+                "termination": "stalemate",
+            },
+            {"fen": chess.STARTING_FEN, "policy_version": policy_map.POLICY_VERSION, "policy": policy, "z": 1},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            buffer_path = pathlib.Path(directory) / "self-play.json"
+            buffer_path.write_text(json.dumps(samples), encoding="utf-8")
+            with mock.patch.object(train, "SELF_PLAY_BUFFER", buffer_path):
+                _, _, _, value_weights = train.load_self_play_samples()
+
+        self.assertEqual(value_weights, [0.0, 1.0, 1.0])
+        fixed_samples = [
+            {"source": "self_play", **samples[0]},
+            {"source": "self_play", **samples[1]},
+        ]
+        _, _, _, _, fixed_value_weights = train_fixed_eval.fixed_eval_arrays(fixed_samples)
+        self.assertEqual(fixed_value_weights.tolist(), [0.0, 1.0])
+
 
 class SearchAndModelTests(unittest.TestCase):
     def test_terminal_value_uses_side_to_move_perspective(self):
@@ -179,6 +206,49 @@ class SearchAndModelTests(unittest.TestCase):
             legal_indices = {policy_map.move_to_index(move) for move in board.legal_moves}
             self.assertEqual(set(policy), legal_indices)
             self.assertAlmostEqual(sum(policy.values()), 1.0)
+
+    def test_arena_pairs_balanced_positions_and_reports_decisive_games(self):
+        start_fens = [chess.STARTING_FEN, "8/8/8/3k4/8/4K3/8/8 w - - 0 1"]
+        with mock.patch.object(self_play, "play_arena_game", side_effect=[1.0, 0.0, 0.5, 1.0]) as play:
+            result = self_play.arena_score(
+                object(),
+                object(),
+                games=4,
+                searches=8,
+                start_fens=start_fens,
+            )
+
+        self.assertEqual(result["wins"], 2)
+        self.assertEqual(result["draws"], 1)
+        self.assertEqual(result["losses"], 1)
+        self.assertEqual(result["decisive_games"], 3)
+        self.assertEqual(play.call_args_list[0].kwargs["start_fen"], start_fens[0])
+        self.assertEqual(play.call_args_list[1].kwargs["start_fen"], start_fens[0])
+        self.assertTrue(play.call_args_list[0].args[2])
+        self.assertFalse(play.call_args_list[1].args[2])
+
+    def test_balanced_arena_positions_filter_large_stockfish_advantages(self):
+        samples = [
+            {"source": "stockfish", "fen": chess.STARTING_FEN, "cp": 20},
+            {
+                "source": "stockfish",
+                "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+                "cp": 500,
+            },
+        ]
+
+        self.assertEqual(train_fixed_eval.balanced_arena_fens(samples, 4), [chess.STARTING_FEN])
+
+    def test_self_play_start_selector_mixes_initial_and_balanced_positions(self):
+        start_fens = ["8/8/8/3k4/8/4K3/8/8 w - - 0 1"]
+        with mock.patch.object(self_play, "START_POSITION_FRACTION", 0.5):
+            selected = [
+                self_play.board_for_self_play_game(index, start_fens).fen() != chess.STARTING_FEN
+                for index in range(100)
+            ]
+
+        self.assertGreaterEqual(sum(selected), 45)
+        self.assertLessEqual(sum(selected), 55)
 
 
 if __name__ == "__main__":

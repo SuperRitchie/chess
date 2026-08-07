@@ -1,5 +1,6 @@
 # ml/train_fixed_eval.py
 """train with persistent neural and search-quality holdouts"""
+import hashlib
 import os
 import random
 
@@ -17,6 +18,8 @@ ARENA_GAMES = int(os.environ.get("AZ_ARENA_GAMES", "2"))
 ARENA_SEARCHES = int(os.environ.get("AZ_ARENA_SEARCHES", "24"))
 ARENA_MAX_PLIES = int(os.environ.get("AZ_ARENA_MAX_PLIES", "160"))
 ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
+ARENA_MIN_DECISIVE_GAMES = int(os.environ.get("AZ_ARENA_MIN_DECISIVE_GAMES", "4"))
+ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "150"))
 MCTS_EVAL_POSITIONS = int(os.environ.get("AZ_MCTS_EVAL_POSITIONS", "48"))
 MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
 MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
@@ -36,13 +39,16 @@ def _valid_self_play_sample(item: dict) -> dict | None:
         outcome = float(item.get("z"))
     except (TypeError, ValueError):
         return None
-    return {
+    sample = {
         "source": "self_play",
         "fen": fen,
         "policy_version": policy_version,
         "policy": item.get("policy"),
         "z": float(np.clip(outcome, -1.0, 1.0)),
     }
+    if item.get("termination"):
+        sample["termination"] = item["termination"]
+    return sample
 
 
 def _valid_stockfish_sample(item: dict) -> dict | None:
@@ -104,6 +110,31 @@ def load_fixed_eval_set() -> list[dict]:
     return items if items and stockfish_count > 0 else create_fixed_eval_set()
 
 
+def balanced_arena_fens(samples: list[dict], count: int) -> list[str]:
+    balanced = []
+    fallback = []
+    for sample in samples:
+        if sample.get("source") != "stockfish" or not sample.get("fen"):
+            continue
+        try:
+            board = chess.Board(sample["fen"])
+            cp = abs(float(sample.get("cp", 0.0)))
+        except (TypeError, ValueError):
+            continue
+        if board.is_game_over(claim_draw=True) or len(board.piece_map()) < 10:
+            continue
+        fen = board.fen(en_passant="fen")
+        fallback.append(fen)
+        if cp <= ARENA_MAX_START_CP:
+            balanced.append(fen)
+
+    candidates = sorted(
+        set(balanced or fallback),
+        key=lambda fen: hashlib.sha256(f"arena-v1:{fen}".encode("utf-8")).hexdigest(),
+    )
+    return candidates[:max(0, count)]
+
+
 def fixed_eval_arrays(samples: list[dict]):
     X = []
     policy_y = []
@@ -134,7 +165,7 @@ def fixed_eval_arrays(samples: list[dict]):
             policy_y.append(policy)
             value_y.append(np.clip(value, -1.0, 1.0))
             policy_weights.append(1.0)
-            value_weights.append(1.0)
+            value_weights.append(1.0 if value != 0.0 or sample.get("termination") else 0.0)
             self_count += 1
         elif source == "stockfish":
             try:
@@ -362,15 +393,25 @@ def main():
 
     arena_result = None
     if accepted and resumed and baseline_model is not None and ARENA_GAMES > 0:
+        arena_fens = balanced_arena_fens(fixed_samples, (ARENA_GAMES + 1) // 2)
         arena_result = arena_score(
             model,
             baseline_model,
             games=ARENA_GAMES,
             searches=ARENA_SEARCHES,
             max_plies=ARENA_MAX_PLIES,
+            start_fens=arena_fens,
         )
-        print(f"[arena] candidate mean score {arena_result:.3f}; required {ARENA_MIN_SCORE:.3f}")
-        if arena_result < ARENA_MIN_SCORE:
+        print(
+            f"[arena] candidate mean score {arena_result['score']:.3f}; "
+            f"record {arena_result['wins']}-{arena_result['draws']}-{arena_result['losses']}; "
+            f"required score {ARENA_MIN_SCORE:.3f} and "
+            f"{ARENA_MIN_DECISIVE_GAMES} decisive games"
+        )
+        if arena_result["decisive_games"] < ARENA_MIN_DECISIVE_GAMES:
+            accepted = False
+            gate_reason = "candidate_arena_not_decisive"
+        elif arena_result["score"] < ARENA_MIN_SCORE:
             accepted = False
             gate_reason = "candidate_arena_score_too_low"
         else:
@@ -399,8 +440,14 @@ def main():
             {
                 "arena_games": ARENA_GAMES,
                 "arena_searches": ARENA_SEARCHES,
-                "arena_candidate_score": arena_result,
+                "arena_candidate_score": arena_result["score"],
                 "arena_min_score": ARENA_MIN_SCORE,
+                "arena_wins": arena_result["wins"],
+                "arena_draws": arena_result["draws"],
+                "arena_losses": arena_result["losses"],
+                "arena_decisive_games": arena_result["decisive_games"],
+                "arena_min_decisive_games": ARENA_MIN_DECISIVE_GAMES,
+                "arena_start_positions": arena_result["start_positions"],
             }
         )
     if baseline_mcts_eval and candidate_mcts_eval:
