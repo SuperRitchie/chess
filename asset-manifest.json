@@ -1,9 +1,9 @@
 {
   "files": {
     "main.css": "/chess/static/css/main.6463ac2b.css",
-    "main.js": "/chess/static/js/main.d46792b4.js",
-    "static/js/242.1e46740a.chunk.js": "/chess/static/js/242.1e46740a.chunk.js",
-    "static/js/193.a26ff8e8.chunk.js": "/chess/static/js/193.a26ff8e8.chunk.js",
+    "main.js": "/chess/static/js/main.90d5064d.js",
+    "static/js/242.b1405c41.chunk.js": "/chess/static/js/242.b1405c41.chunk.js",
+    "static/js/193.92cfa396.chunk.js": "/chess/static/js/193.92cfa396.chunk.js",
     "static/js/956.93806e02.chunk.js": "/chess/static/js/956.93806e02.chunk.js",
     "static/media/move.mp3": "/chess/static/media/move.ff0e7615887c5bf5f7dd.mp3",
     "static/media/black-rook.svg": "/chess/static/media/black-rook.fdc575582c2cbe2ec82093702945226f.svg",
@@ -21,13 +21,13 @@
     "static/media/white-king.svg": "/chess/static/media/white-king.5d58f1999749c1b5ef5bc1699c38b2f7.svg",
     "index.html": "/chess/index.html",
     "main.6463ac2b.css.map": "/chess/static/css/main.6463ac2b.css.map",
-    "main.d46792b4.js.map": "/chess/static/js/main.d46792b4.js.map",
-    "242.1e46740a.chunk.js.map": "/chess/static/js/242.1e46740a.chunk.js.map",
-    "193.a26ff8e8.chunk.js.map": "/chess/static/js/193.a26ff8e8.chunk.js.map",
+    "main.90d5064d.js.map": "/chess/static/js/main.90d5064d.js.map",
+    "242.b1405c41.chunk.js.map": "/chess/static/js/242.b1405c41.chunk.js.map",
+    "193.92cfa396.chunk.js.map": "/chess/static/js/193.92cfa396.chunk.js.map",
     "956.93806e02.chunk.js.map": "/chess/static/js/956.93806e02.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.6463ac2b.css",
-    "static/js/main.d46792b4.js"
+    "static/js/main.90d5064d.js"
   ]
 }
