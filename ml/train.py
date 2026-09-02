@@ -47,6 +47,7 @@ STOCKFISH_VALUE_WEIGHT = float(os.environ.get("AZ_STOCKFISH_VALUE_WEIGHT", "1.0"
 STOCKFISH_POLICY_WEIGHT = float(os.environ.get("AZ_STOCKFISH_POLICY_WEIGHT", "1.0"))
 MERGE_FRESH_STOCKFISH_LABELS = os.environ.get("AZ_MERGE_FRESH_STOCKFISH_LABELS", "1") != "0"
 TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
+RUN_KIND = os.environ.get("AZ_RUN_KIND", "unspecified")
 
 random.seed(TRAIN_SEED)
 np.random.seed(TRAIN_SEED)
@@ -567,6 +568,7 @@ def append_training_history(
     records = read_json_list(TRAINING_HISTORY)
     record = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
+        "run_kind": RUN_KIND,
         "policy_version": POLICY_VERSION,
         "feature_planes": PLANES,
         "resumed_from_checkpoint": resumed,

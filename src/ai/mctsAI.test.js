@@ -108,4 +108,18 @@ describe('neural PUCT MCTS', () => {
 
     expect(chosen).not.toMatchObject({ from: { x: 1, y: 5 }, to: { x: 2, y: 5 } });
   });
+
+  test('uses strong heuristic finalists when the live search budget is sparse', async () => {
+    const state = makeMove(initialPieces(), { x: 6, y: 4 }, { x: 4, y: 4 });
+
+    const chosen = await pickMCTSMove(state.pieces, 'black', state.nextEnPassant, {
+      timeMs: 1,
+      maxIterations: 1,
+      batchSize: 1,
+      tacticalCandidates: 8,
+    });
+
+    expect(chosen).not.toMatchObject({ from: { x: 0, y: 6 }, to: { x: 2, y: 7 } });
+    expect(chosen).not.toMatchObject({ from: { x: 1, y: 0 }, to: { x: 2, y: 0 } });
+  });
 });

@@ -19,7 +19,9 @@ ARENA_SEARCHES = int(os.environ.get("AZ_ARENA_SEARCHES", "24"))
 ARENA_MAX_PLIES = int(os.environ.get("AZ_ARENA_MAX_PLIES", "160"))
 ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
 ARENA_MIN_DECISIVE_GAMES = int(os.environ.get("AZ_ARENA_MIN_DECISIVE_GAMES", "4"))
-ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "150"))
+ARENA_BALANCED_FRACTION = float(os.environ.get("AZ_ARENA_BALANCED_FRACTION", "0.5"))
+ARENA_MIN_CONVERSION_CP = float(os.environ.get("AZ_ARENA_MIN_CONVERSION_CP", "200"))
+ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "800"))
 MCTS_EVAL_POSITIONS = int(os.environ.get("AZ_MCTS_EVAL_POSITIONS", "48"))
 MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
 MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
@@ -112,6 +114,7 @@ def load_fixed_eval_set() -> list[dict]:
 
 def balanced_arena_fens(samples: list[dict], count: int) -> list[str]:
     balanced = []
+    conversion = []
     fallback = []
     for sample in samples:
         if sample.get("source") != "stockfish" or not sample.get("fen"):
@@ -125,14 +128,26 @@ def balanced_arena_fens(samples: list[dict], count: int) -> list[str]:
             continue
         fen = board.fen(en_passant="fen")
         fallback.append(fen)
-        if cp <= ARENA_MAX_START_CP:
+        if cp < ARENA_MIN_CONVERSION_CP:
             balanced.append(fen)
+        elif cp <= ARENA_MAX_START_CP:
+            conversion.append(fen)
 
-    candidates = sorted(
-        set(balanced or fallback),
-        key=lambda fen: hashlib.sha256(f"arena-v1:{fen}".encode("utf-8")).hexdigest(),
-    )
-    return candidates[:max(0, count)]
+    def ordered(items: list[str], salt: str) -> list[str]:
+        return sorted(
+            set(items),
+            key=lambda fen: hashlib.sha256(f"{salt}:{fen}".encode("utf-8")).hexdigest(),
+        )
+
+    count = max(0, count)
+    balanced_target = min(count, max(0, round(count * ARENA_BALANCED_FRACTION)))
+    conversion_target = count - balanced_target
+    selected = ordered(balanced, "arena-balanced-v2")[:balanced_target]
+    selected += ordered(conversion, "arena-conversion-v2")[:conversion_target]
+    if len(selected) < count:
+        remaining = [fen for fen in ordered(fallback, "arena-fallback-v2") if fen not in selected]
+        selected += remaining[:count - len(selected)]
+    return selected
 
 
 def fixed_eval_arrays(samples: list[dict]):
@@ -448,6 +463,9 @@ def main():
                 "arena_decisive_games": arena_result["decisive_games"],
                 "arena_min_decisive_games": ARENA_MIN_DECISIVE_GAMES,
                 "arena_start_positions": arena_result["start_positions"],
+                "arena_balanced_fraction": ARENA_BALANCED_FRACTION,
+                "arena_min_conversion_cp": ARENA_MIN_CONVERSION_CP,
+                "arena_max_start_cp": ARENA_MAX_START_CP,
             }
         )
     if baseline_mcts_eval and candidate_mcts_eval:
