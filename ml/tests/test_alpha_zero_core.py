@@ -165,6 +165,10 @@ class SearchAndModelTests(unittest.TestCase):
             (False, "previous_validation_failed"),
         )
 
+    def test_decisive_arena_requires_statistical_separation(self):
+        self.assertLess(train_fixed_eval.wilson_lower_bound(9, 12), 0.5)
+        self.assertGreater(train_fixed_eval.wilson_lower_bound(10, 12), 0.5)
+
     def test_mcts_gate_rejects_top_move_accuracy_regression(self):
         baseline = {"alignment": 0.0634, "top_move_accuracy": 0.1042}
         candidate = {"alignment": 0.0650, "top_move_accuracy": 0.0833}

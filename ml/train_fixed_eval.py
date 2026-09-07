@@ -1,6 +1,7 @@
 # ml/train_fixed_eval.py
 """train with persistent neural and search-quality holdouts"""
 import hashlib
+import math
 import os
 import random
 
@@ -20,6 +21,8 @@ ARENA_SEARCHES = int(os.environ.get("AZ_ARENA_SEARCHES", "24"))
 ARENA_MAX_PLIES = int(os.environ.get("AZ_ARENA_MAX_PLIES", "160"))
 ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
 ARENA_MIN_DECISIVE_GAMES = int(os.environ.get("AZ_ARENA_MIN_DECISIVE_GAMES", "4"))
+ARENA_DECISIVE_CONFIDENCE_Z = float(os.environ.get("AZ_ARENA_DECISIVE_CONFIDENCE_Z", "1.959963984540054"))
+ARENA_MIN_DECISIVE_WIN_RATE_LCB = float(os.environ.get("AZ_ARENA_MIN_DECISIVE_WIN_RATE_LCB", "0.5"))
 ARENA_BALANCED_FRACTION = float(os.environ.get("AZ_ARENA_BALANCED_FRACTION", "0.5"))
 ARENA_MIN_CONVERSION_CP = float(os.environ.get("AZ_ARENA_MIN_CONVERSION_CP", "200"))
 ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "800"))
@@ -31,6 +34,17 @@ MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
 MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
 MIN_MCTS_TOP_MOVE_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_TOP_MOVE_IMPROVEMENT", "0.0"))
 _EPS = 1e-7
+
+
+def wilson_lower_bound(successes: int, trials: int, z: float = ARENA_DECISIVE_CONFIDENCE_Z) -> float:
+    if trials <= 0:
+        return 0.0
+    rate = successes / trials
+    z_squared = z * z
+    denominator = 1.0 + z_squared / trials
+    center = rate + z_squared / (2.0 * trials)
+    margin = z * math.sqrt(rate * (1.0 - rate) / trials + z_squared / (4.0 * trials * trials))
+    return (center - margin) / denominator
 
 
 def _valid_self_play_sample(item: dict) -> dict | None:
@@ -537,11 +551,18 @@ def main():
             max_plies=ARENA_MAX_PLIES,
             start_fens=arena_fens,
         )
+        decisive_win_rate = arena_result["wins"] / max(arena_result["decisive_games"], 1)
+        decisive_win_rate_lcb = wilson_lower_bound(
+            arena_result["wins"],
+            arena_result["decisive_games"],
+        )
         print(
             f"[arena] candidate mean score {arena_result['score']:.3f}; "
             f"record {arena_result['wins']}-{arena_result['draws']}-{arena_result['losses']}; "
             f"required score {ARENA_MIN_SCORE:.3f} and "
-            f"{ARENA_MIN_DECISIVE_GAMES} decisive games"
+            f"{ARENA_MIN_DECISIVE_GAMES} decisive games; "
+            f"decisive win rate {decisive_win_rate:.3f}, "
+            f"95% lower bound {decisive_win_rate_lcb:.3f}"
         )
         if arena_result["decisive_games"] < ARENA_MIN_DECISIVE_GAMES:
             accepted = False
@@ -549,6 +570,9 @@ def main():
         elif arena_result["score"] < ARENA_MIN_SCORE:
             accepted = False
             gate_reason = "candidate_arena_score_too_low"
+        elif decisive_win_rate_lcb <= ARENA_MIN_DECISIVE_WIN_RATE_LCB:
+            accepted = False
+            gate_reason = "candidate_arena_not_statistically_better"
         else:
             gate_reason = f"{gate_reason}_and_arena_passed"
 
@@ -582,6 +606,10 @@ def main():
                 "arena_losses": arena_result["losses"],
                 "arena_decisive_games": arena_result["decisive_games"],
                 "arena_min_decisive_games": ARENA_MIN_DECISIVE_GAMES,
+                "arena_decisive_win_rate": decisive_win_rate,
+                "arena_decisive_win_rate_lower_bound": decisive_win_rate_lcb,
+                "arena_decisive_confidence_z": ARENA_DECISIVE_CONFIDENCE_Z,
+                "arena_min_decisive_win_rate_lower_bound": ARENA_MIN_DECISIVE_WIN_RATE_LCB,
                 "arena_start_positions": arena_result["start_positions"],
                 "arena_balanced_fraction": ARENA_BALANCED_FRACTION,
                 "arena_min_conversion_cp": ARENA_MIN_CONVERSION_CP,
