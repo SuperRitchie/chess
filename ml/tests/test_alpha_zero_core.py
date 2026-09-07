@@ -227,17 +227,30 @@ class SearchAndModelTests(unittest.TestCase):
         self.assertTrue(play.call_args_list[0].args[2])
         self.assertFalse(play.call_args_list[1].args[2])
 
-    def test_balanced_arena_positions_filter_large_stockfish_advantages(self):
+    def test_arena_positions_mix_balanced_and_conversion_tests(self):
+        conversion_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
         samples = [
             {"source": "stockfish", "fen": chess.STARTING_FEN, "cp": 20},
             {
                 "source": "stockfish",
-                "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+                "fen": conversion_fen,
                 "cp": 500,
+            },
+            {
+                "source": "stockfish",
+                "fen": "rnbqkbnr/pppp1ppp/8/8/4p3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 2",
+                "cp": 5000,
             },
         ]
 
-        self.assertEqual(train_fixed_eval.balanced_arena_fens(samples, 4), [chess.STARTING_FEN])
+        with (
+            mock.patch.object(train_fixed_eval, "ARENA_BALANCED_FRACTION", 0.5),
+            mock.patch.object(train_fixed_eval, "ARENA_MIN_CONVERSION_CP", 200),
+            mock.patch.object(train_fixed_eval, "ARENA_MAX_START_CP", 800),
+        ):
+            selected = train_fixed_eval.balanced_arena_fens(samples, 2)
+
+        self.assertEqual(set(selected), {chess.STARTING_FEN, conversion_fen})
 
     def test_self_play_start_selector_mixes_initial_and_balanced_positions(self):
         start_fens = ["8/8/8/3k4/8/4K3/8/8 w - - 0 1"]
