@@ -183,6 +183,54 @@ class SearchAndModelTests(unittest.TestCase):
             (True, "mcts_policy_improved"),
         )
 
+    def test_nn_gate_requires_alignment_gain_without_accuracy_loss(self):
+        baseline = {"alignment": 0.08, "top_move_accuracy": 0.10}
+        candidate = {"alignment": 0.09, "top_move_accuracy": 0.10}
+
+        self.assertEqual(
+            train_fixed_eval.nn_candidate_passes(baseline, candidate),
+            (True, "nn_policy_improved"),
+        )
+
+    def test_nn_gate_rejects_top_move_accuracy_regression(self):
+        baseline = {"alignment": 0.08, "top_move_accuracy": 0.10}
+        candidate = {"alignment": 0.09, "top_move_accuracy": 0.09}
+
+        self.assertEqual(
+            train_fixed_eval.nn_candidate_passes(baseline, candidate),
+            (False, "candidate_nn_top_move_accuracy_regressed"),
+        )
+
+    def test_nn_policy_accuracy_uses_legal_stockfish_moves(self):
+        expected = policy_map.move_to_index(chess.Move.from_uci("e2e4"))
+        policy = [[expected, 1.0]]
+        samples = [
+            {
+                "source": "stockfish",
+                "fen": chess.STARTING_FEN,
+                "policy_version": policy_map.POLICY_VERSION,
+                "policy": policy,
+            }
+        ]
+
+        class FixedPolicyModel:
+            def predict(self, features_batch, batch_size=256, verbose=0):
+                logits = np.zeros((len(features_batch), policy_map.POLICY_SIZE), dtype=np.float32)
+                logits[:, expected] = 10.0
+                values = np.zeros((len(features_batch), 1), dtype=np.float32)
+                return [logits, values]
+
+        result = train_fixed_eval.evaluate_nn_policy_alignment(
+            FixedPolicyModel(),
+            samples,
+            "test",
+            limit=1,
+        )
+
+        self.assertEqual(result["positions"], 1)
+        self.assertEqual(result["top_move_accuracy"], 1.0)
+        self.assertGreater(result["alignment"], 0.99)
+
     def test_batched_search_shares_model_calls_across_games(self):
         class CountingModel:
             def __init__(self):
@@ -227,17 +275,30 @@ class SearchAndModelTests(unittest.TestCase):
         self.assertTrue(play.call_args_list[0].args[2])
         self.assertFalse(play.call_args_list[1].args[2])
 
-    def test_balanced_arena_positions_filter_large_stockfish_advantages(self):
+    def test_arena_positions_mix_balanced_and_conversion_tests(self):
+        conversion_fen = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"
         samples = [
             {"source": "stockfish", "fen": chess.STARTING_FEN, "cp": 20},
             {
                 "source": "stockfish",
-                "fen": "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2",
+                "fen": conversion_fen,
                 "cp": 500,
+            },
+            {
+                "source": "stockfish",
+                "fen": "rnbqkbnr/pppp1ppp/8/8/4p3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 0 2",
+                "cp": 5000,
             },
         ]
 
-        self.assertEqual(train_fixed_eval.balanced_arena_fens(samples, 4), [chess.STARTING_FEN])
+        with (
+            mock.patch.object(train_fixed_eval, "ARENA_BALANCED_FRACTION", 0.5),
+            mock.patch.object(train_fixed_eval, "ARENA_MIN_CONVERSION_CP", 200),
+            mock.patch.object(train_fixed_eval, "ARENA_MAX_START_CP", 800),
+        ):
+            selected = train_fixed_eval.balanced_arena_fens(samples, 2)
+
+        self.assertEqual(set(selected), {chess.STARTING_FEN, conversion_fen})
 
     def test_self_play_start_selector_mixes_initial_and_balanced_positions(self):
         start_fens = ["8/8/8/3k4/8/4K3/8/8 w - - 0 1"]

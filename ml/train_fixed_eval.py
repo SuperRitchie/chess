@@ -9,6 +9,7 @@ import numpy as np
 import tensorflow as tf
 
 import train
+from policy_map import move_to_index
 from self_play import arena_score, run_search_batch
 
 FIXED_EVAL_SET = train.pathlib.Path("ml/data/fixed_eval_set_v3.json")
@@ -19,7 +20,12 @@ ARENA_SEARCHES = int(os.environ.get("AZ_ARENA_SEARCHES", "24"))
 ARENA_MAX_PLIES = int(os.environ.get("AZ_ARENA_MAX_PLIES", "160"))
 ARENA_MIN_SCORE = float(os.environ.get("AZ_ARENA_MIN_SCORE", "0.5"))
 ARENA_MIN_DECISIVE_GAMES = int(os.environ.get("AZ_ARENA_MIN_DECISIVE_GAMES", "4"))
-ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "150"))
+ARENA_BALANCED_FRACTION = float(os.environ.get("AZ_ARENA_BALANCED_FRACTION", "0.5"))
+ARENA_MIN_CONVERSION_CP = float(os.environ.get("AZ_ARENA_MIN_CONVERSION_CP", "200"))
+ARENA_MAX_START_CP = float(os.environ.get("AZ_ARENA_MAX_START_CP", "800"))
+NN_EVAL_POSITIONS = int(os.environ.get("AZ_NN_EVAL_POSITIONS", "192"))
+MIN_NN_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_NN_ALIGNMENT_IMPROVEMENT", "0.0001"))
+MIN_NN_TOP_MOVE_IMPROVEMENT = float(os.environ.get("AZ_MIN_NN_TOP_MOVE_IMPROVEMENT", "0.0"))
 MCTS_EVAL_POSITIONS = int(os.environ.get("AZ_MCTS_EVAL_POSITIONS", "48"))
 MCTS_EVAL_SEARCHES = int(os.environ.get("AZ_MCTS_EVAL_SEARCHES", "64"))
 MIN_MCTS_ALIGNMENT_IMPROVEMENT = float(os.environ.get("AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT", "0.0001"))
@@ -112,6 +118,7 @@ def load_fixed_eval_set() -> list[dict]:
 
 def balanced_arena_fens(samples: list[dict], count: int) -> list[str]:
     balanced = []
+    conversion = []
     fallback = []
     for sample in samples:
         if sample.get("source") != "stockfish" or not sample.get("fen"):
@@ -125,14 +132,26 @@ def balanced_arena_fens(samples: list[dict], count: int) -> list[str]:
             continue
         fen = board.fen(en_passant="fen")
         fallback.append(fen)
-        if cp <= ARENA_MAX_START_CP:
+        if cp < ARENA_MIN_CONVERSION_CP:
             balanced.append(fen)
+        elif cp <= ARENA_MAX_START_CP:
+            conversion.append(fen)
 
-    candidates = sorted(
-        set(balanced or fallback),
-        key=lambda fen: hashlib.sha256(f"arena-v1:{fen}".encode("utf-8")).hexdigest(),
-    )
-    return candidates[:max(0, count)]
+    def ordered(items: list[str], salt: str) -> list[str]:
+        return sorted(
+            set(items),
+            key=lambda fen: hashlib.sha256(f"{salt}:{fen}".encode("utf-8")).hexdigest(),
+        )
+
+    count = max(0, count)
+    balanced_target = min(count, max(0, round(count * ARENA_BALANCED_FRACTION)))
+    conversion_target = count - balanced_target
+    selected = ordered(balanced, "arena-balanced-v2")[:balanced_target]
+    selected += ordered(conversion, "arena-conversion-v2")[:conversion_target]
+    if len(selected) < count:
+        remaining = [fen for fen in ordered(fallback, "arena-fallback-v2") if fen not in selected]
+        selected += remaining[:count - len(selected)]
+    return selected
 
 
 def fixed_eval_arrays(samples: list[dict]):
@@ -250,6 +269,113 @@ def evaluate_fixed_model(model: tf.keras.Model | None, X, P, V, PW, VW, label: s
         f"(policy {policy_loss:.6f}, value {value_loss:.6f}, value_mae {value_mae:.6f})"
     )
     return metrics
+
+
+def stockfish_policy_holdout(samples: list[dict], limit: int) -> tuple[list[chess.Board], np.ndarray]:
+    boards = []
+    targets = []
+    for sample in samples:
+        if sample.get("source") != "stockfish":
+            continue
+        fen = sample.get("fen")
+        if not fen:
+            continue
+        target = train.dense_policy_from_sparse(
+            sample.get("policy"),
+            fen=fen,
+            policy_version=int(sample.get("policy_version", train.POLICY_VERSION)),
+        )
+        if float(np.sum(target)) <= 0:
+            continue
+        try:
+            boards.append(chess.Board(fen))
+        except ValueError:
+            continue
+        targets.append(target)
+        if len(boards) >= limit:
+            break
+    if not targets:
+        return [], np.empty((0, train.POLICY_SIZE), dtype=np.float32)
+    return boards, np.stack(targets).astype(np.float32)
+
+
+def evaluate_nn_policy_alignment(
+    model: tf.keras.Model | None,
+    samples: list[dict],
+    label: str,
+    limit: int | None = None,
+) -> dict | None:
+    if model is None:
+        return None
+    boards, targets = stockfish_policy_holdout(samples, limit or NN_EVAL_POSITIONS)
+    if not boards:
+        print(f"[nn-eval] {label} unavailable: no Stockfish policy holdout")
+        return None
+
+    features = train.ensure_4d_board(
+        np.stack([train.board_to_features(board.fen(en_passant="fen")) for board in boards]).astype(np.float32)
+    )
+    try:
+        predictions = model.predict(features, batch_size=256, verbose=0)
+    except Exception as exc:
+        print(f"[nn-eval] {label} unavailable: {exc}")
+        return None
+    if not isinstance(predictions, (list, tuple)) or len(predictions) != 2:
+        print(f"[nn-eval] {label} unavailable: expected two outputs")
+        return None
+
+    logits = np.asarray(predictions[0], dtype=np.float32)
+    if logits.shape != targets.shape:
+        print(f"[nn-eval] {label} unavailable: policy shape {logits.shape} does not match {targets.shape}")
+        return None
+
+    alignments = []
+    top_move_hits = []
+    for board, target, policy_logits in zip(boards, targets, logits):
+        legal_indices = np.array(
+            [move_to_index(move) for move in board.legal_moves],
+            dtype=np.int64,
+        )
+        legal_logits = policy_logits[legal_indices]
+        legal_logits = legal_logits - np.max(legal_logits)
+        probabilities = np.exp(legal_logits)
+        probabilities /= max(float(np.sum(probabilities)), _EPS)
+        legal_target = target[legal_indices]
+        alignments.append(float(np.sum(legal_target * probabilities)))
+        chosen = int(legal_indices[int(np.argmax(legal_logits))])
+        top_move_hits.append(chosen == int(np.argmax(target)))
+
+    metrics = {
+        "positions": len(boards),
+        "alignment": float(np.mean(alignments)),
+        "top_move_accuracy": float(np.mean(top_move_hits)),
+    }
+    print(
+        f"[nn-eval] {label} alignment {metrics['alignment']:.6f}, "
+        f"top move {metrics['top_move_accuracy']:.3f} over {len(boards)} positions"
+    )
+    return metrics
+
+
+def nn_candidate_passes(
+    baseline_metrics: dict | None,
+    candidate_metrics: dict | None,
+) -> tuple[bool, str]:
+    if baseline_metrics is None or candidate_metrics is None:
+        return False, "candidate_nn_evaluation_unavailable"
+
+    baseline_alignment = baseline_metrics.get("alignment")
+    candidate_alignment = candidate_metrics.get("alignment")
+    baseline_accuracy = baseline_metrics.get("top_move_accuracy")
+    candidate_accuracy = candidate_metrics.get("top_move_accuracy")
+    values = [baseline_alignment, candidate_alignment, baseline_accuracy, candidate_accuracy]
+    if any(value is None or not np.isfinite(value) for value in values):
+        return False, "candidate_nn_metrics_unavailable"
+    if candidate_alignment < baseline_alignment + MIN_NN_ALIGNMENT_IMPROVEMENT:
+        return False, "candidate_nn_alignment_did_not_improve"
+    if candidate_accuracy < baseline_accuracy + MIN_NN_TOP_MOVE_IMPROVEMENT:
+        return False, "candidate_nn_top_move_accuracy_regressed"
+    return True, "nn_policy_improved"
 
 
 def evaluate_mcts_alignment(model: tf.keras.Model | None, samples: list[dict], label: str) -> dict | None:
@@ -376,20 +502,29 @@ def main():
     fixed_candidate_eval = evaluate_fixed_model(model, Xev, Pev, Vev, PWev, VWev, "candidate fixed")
     accepted, gate_reason = train.should_accept_candidate(fixed_candidate_eval, fixed_baseline_eval, resumed)
 
+    baseline_nn_eval = None
+    candidate_nn_eval = None
     baseline_mcts_eval = None
     candidate_mcts_eval = None
-    if accepted and resumed:
+    if resumed:
+        baseline_nn_eval = evaluate_nn_policy_alignment(baseline_model, fixed_samples, "previous")
+        candidate_nn_eval = evaluate_nn_policy_alignment(model, fixed_samples, "candidate")
         baseline_mcts_eval = evaluate_mcts_alignment(baseline_model, fixed_samples, "previous")
         candidate_mcts_eval = evaluate_mcts_alignment(model, fixed_samples, "candidate")
-        mcts_accepted, mcts_reason = mcts_candidate_passes(
-            baseline_mcts_eval,
-            candidate_mcts_eval,
-        )
-        if not mcts_accepted:
-            accepted = False
-            gate_reason = mcts_reason
-        else:
-            gate_reason = f"{gate_reason}_and_{mcts_reason}"
+        if accepted:
+            nn_accepted, nn_reason = nn_candidate_passes(baseline_nn_eval, candidate_nn_eval)
+            mcts_accepted, mcts_reason = mcts_candidate_passes(
+                baseline_mcts_eval,
+                candidate_mcts_eval,
+            )
+            if not nn_accepted:
+                accepted = False
+                gate_reason = nn_reason
+            elif not mcts_accepted:
+                accepted = False
+                gate_reason = mcts_reason
+            else:
+                gate_reason = f"{gate_reason}_and_{nn_reason}_and_{mcts_reason}"
 
     arena_result = None
     if accepted and resumed and baseline_model is not None and ARENA_GAMES > 0:
@@ -448,6 +583,9 @@ def main():
                 "arena_decisive_games": arena_result["decisive_games"],
                 "arena_min_decisive_games": ARENA_MIN_DECISIVE_GAMES,
                 "arena_start_positions": arena_result["start_positions"],
+                "arena_balanced_fraction": ARENA_BALANCED_FRACTION,
+                "arena_min_conversion_cp": ARENA_MIN_CONVERSION_CP,
+                "arena_max_start_cp": ARENA_MAX_START_CP,
             }
         )
     if baseline_mcts_eval and candidate_mcts_eval:
@@ -461,6 +599,18 @@ def main():
                 "candidate_mcts_top_move_accuracy": candidate_mcts_eval["top_move_accuracy"],
                 "min_mcts_alignment_improvement": MIN_MCTS_ALIGNMENT_IMPROVEMENT,
                 "min_mcts_top_move_improvement": MIN_MCTS_TOP_MOVE_IMPROVEMENT,
+            }
+        )
+    if baseline_nn_eval and candidate_nn_eval:
+        extra_metrics.update(
+            {
+                "nn_eval_positions": candidate_nn_eval["positions"],
+                "baseline_nn_alignment": baseline_nn_eval["alignment"],
+                "candidate_nn_alignment": candidate_nn_eval["alignment"],
+                "baseline_nn_top_move_accuracy": baseline_nn_eval["top_move_accuracy"],
+                "candidate_nn_top_move_accuracy": candidate_nn_eval["top_move_accuracy"],
+                "min_nn_alignment_improvement": MIN_NN_ALIGNMENT_IMPROVEMENT,
+                "min_nn_top_move_improvement": MIN_NN_TOP_MOVE_IMPROVEMENT,
             }
         )
 

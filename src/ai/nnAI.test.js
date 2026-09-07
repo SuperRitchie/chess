@@ -100,4 +100,19 @@ describe('neural policy encoding', () => {
     expect(predictBatch).toHaveBeenCalledTimes(3);
     expect(predictBatch.mock.calls.some(([positions]) => positions.length > 1)).toBe(true);
   });
+
+  test('plays an available checkmate without waiting for neural inference', async () => {
+    const pieces = {
+      '0-0': piece('black', 'king'),
+      '2-2': piece('white', 'king'),
+      '2-1': piece('white', 'queen'),
+    };
+    const predictBatch = jest.fn();
+
+    const chosen = await pickNNMove(pieces, 'white', null, 2, { predictBatch });
+
+    expect(chosen.from).toEqual({ x: 2, y: 1 });
+    expect(chosen.to).toEqual({ x: 1, y: 1 });
+    expect(predictBatch).not.toHaveBeenCalled();
+  });
 });
