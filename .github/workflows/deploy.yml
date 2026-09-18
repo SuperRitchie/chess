@@ -3,6 +3,11 @@ name: Deploy with npm run deploy
 on:
   push:
     branches: [ master ]
+  workflow_run:
+    workflows:
+      - Nightly NN training
+      - Nightly policy-value self training
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -14,9 +19,12 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: master
 
       - uses: actions/setup-node@v7
         with:
