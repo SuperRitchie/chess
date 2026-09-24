@@ -232,6 +232,14 @@ export async function pickNNMove(
     tacticalWeight = 0.45,
   } = {},
 ) {
+  const legalRootMoves = listLegalMoves(pieces, color, enPassantTarget);
+  const nextColor = color === 'white' ? 'black' : 'white';
+  for (const move of legalRootMoves) {
+    const result = applyMove(pieces, move, enPassantTarget);
+    const replies = listLegalMoves(result.pieces, nextColor, result.nextEnPassant);
+    if (replies.length === 0 && isKingInCheck(result.pieces, nextColor)) return result.move;
+  }
+
   const [rawRoot] = await predictBatch([{ pieces, color, enPassantTarget }]);
   const rootPrediction = stabilizePolicyValue(
     pieces,
@@ -243,7 +251,6 @@ export async function pickNNMove(
   if (rootMoves.length === 0) return null;
   if (depth <= 1) return applyMove(pieces, rootMoves[0], enPassantTarget).move;
 
-  const nextColor = color === 'white' ? 'black' : 'white';
   const candidates = rootMoves.map((move) => ({
     ...applyMove(pieces, move, enPassantTarget),
     score: Infinity,
