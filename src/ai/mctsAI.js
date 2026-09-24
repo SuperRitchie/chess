@@ -6,6 +6,7 @@ import {
 } from './nnAI';
 import {
   positionKey,
+  rankMoves,
   stabilizePolicyValue,
   tacticalSearch,
 } from './chessHeuristics';
@@ -262,9 +263,28 @@ export async function pickMCTSMove(
     return child.meanValue < current.meanValue ? child : current;
   }, null);
 
-  const finalists = [...root.children]
+  const finalistLimit = Math.max(1, tacticalCandidates);
+  const rootPrediction = predictionCache.get(positionKey(rootPieces, color, enPassantTarget));
+  const childrenByMove = new Map(root.children.map((child) => [moveKey(child.move), child]));
+  const finalists = [];
+  const finalistKeys = new Set();
+  const addFinalist = (child) => {
+    if (!child || finalists.length >= finalistLimit) return;
+    const key = moveKey(child.move);
+    if (finalistKeys.has(key)) return;
+    finalistKeys.add(key);
+    finalists.push(child);
+  };
+
+  if (rootPrediction) {
+    const heuristicCount = Math.max(1, Math.ceil(finalistLimit * 0.75));
+    rankMoves(rootPrediction).slice(0, heuristicCount).forEach((move) => {
+      addFinalist(childrenByMove.get(moveKey(move)));
+    });
+  }
+  [...root.children]
     .sort((first, second) => second.visitCount - first.visitCount)
-    .slice(0, Math.max(1, tacticalCandidates));
+    .forEach(addFinalist);
   const tacticalCache = new Map();
   const scored = finalists.map((child) => {
     const tacticalScore = -tacticalSearch(
