@@ -4,6 +4,10 @@ on:
   push:
     branches: [ master ]
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Nightly NN training", "Nightly policy-value self training"]
+    types: [completed]
+    branches: [master]
 
 permissions:
   contents: write   # required to push to gh-pages
@@ -14,9 +18,12 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: master
 
       - uses: actions/setup-node@v7
         with:

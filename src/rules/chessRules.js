@@ -37,44 +37,37 @@ function findKing(pieces, color) {
 }
 
 export function isSquareAttacked(pieces, x, y, byColor) {
-  for (let sx = 0; sx < 8; sx++) {
-    for (let sy = 0; sy < 8; sy++) {
-      const p = getPiece(pieces, sx, sy);
-      if (!p || p.color !== byColor) continue;
-
-      const dx = x - sx;
-      const dy = y - sy;
-      const adx = Math.abs(dx);
-      const ady = Math.abs(dy);
-
-      switch (p.type) {
-        case 'pawn': {
-          const dir = byColor === 'white' ? -1 : 1;
-          if (dx === dir && Math.abs(dy) === 1) return true;
-          break;
-        }
-        case 'knight':
-          if ((adx === 1 && ady === 2) || (adx === 2 && ady === 1)) return true;
-          break;
-        case 'bishop':
-          if (adx === ady && pathClear(pieces, sx, sy, x, y)) return true;
-          break;
-        case 'rook':
-          if ((sx === x || sy === y) && pathClear(pieces, sx, sy, x, y)) return true;
-          break;
-        case 'queen':
-          if (((sx === x || sy === y) || adx === ady) && pathClear(pieces, sx, sy, x, y)) return true;
-          break;
-        case 'king':
-          if (adx <= 1 && ady <= 1) return true;
-          break;
-        default:
-          break;
-      }
+  const pawnRow = x + (byColor === 'white' ? 1 : -1);
+  for (const file of [y - 1, y + 1]) {
+    const pawn = getPiece(pieces, pawnRow, file);
+    if (pawn?.color === byColor && pawn.type === 'pawn') return true;
+  }
+  for (const [dx, dy] of KNIGHT_STEPS) {
+    const knight = getPiece(pieces, x + dx, y + dy);
+    if (knight?.color === byColor && knight.type === 'knight') return true;
+  }
+  for (const [dx, dy] of KING_STEPS) {
+    for (let distance = 1; distance < 8; distance += 1) {
+      const sx = x + dx * distance;
+      const sy = y + dy * distance;
+      if (!inBounds(sx, sy)) break;
+      const piece = getPiece(pieces, sx, sy);
+      if (!piece) continue;
+      if (piece.color === byColor && (
+        piece.type === 'queen' ||
+        piece.type === (dx && dy ? 'bishop' : 'rook') ||
+        (distance === 1 && piece.type === 'king')
+      )) return true;
+      break;
     }
   }
   return false;
 }
+
+const KNIGHT_STEPS = [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]];
+const ROOK_STEPS = [[-1, 0], [0, -1], [0, 1], [1, 0]];
+const BISHOP_STEPS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+const KING_STEPS = [...ROOK_STEPS, ...BISHOP_STEPS];
 
 export function isKingInCheck(pieces, color) {
   const king = findKing(pieces, color);
@@ -154,7 +147,7 @@ function isPseudoLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget = null
   if ((isWhiteTurn && mover.color !== 'white') || (!isWhiteTurn && mover.color !== 'black')) return false;
 
   const dest = getPiece(pieces, x2, y2);
-  if (sameColor(mover, dest)) return false;
+  if (sameColor(mover, dest) || dest?.type === 'king') return false;
 
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -251,22 +244,41 @@ export function listLegalMoves(pieces, color, enPassantTarget = null) {
     for (let y1 = 0; y1 < 8; y1++) {
       const piece = getPiece(pieces, x1, y1);
       if (!piece || piece.color !== color) continue;
-      for (let x2 = 0; x2 < 8; x2++) {
-        for (let y2 = 0; y2 < 8; y2++) {
-          const from = { x: x1, y: y1 };
-          const to = { x: x2, y: y2 };
-          if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) continue;
-
-          const target = getPiece(pieces, x2, y2);
-          const needsPromotion = piece.type === 'pawn' && (x2 === 0 || x2 === 7);
-          const baseMove = { from, to, capture: !!target, needsPromotion };
-          if (needsPromotion) {
-            for (const promotionType of ['queen', 'rook', 'bishop', 'knight']) {
-              moves.push({ ...baseMove, promotionType });
-            }
-          } else {
-            moves.push(baseMove);
+      const targets = [];
+      if (piece.type === 'pawn') {
+        const direction = color === 'white' ? -1 : 1;
+        targets.push([x1 + direction, y1], [x1 + direction, y1 - 1], [x1 + direction, y1 + 1]);
+        if (x1 === (color === 'white' ? 6 : 1)) targets.push([x1 + 2 * direction, y1]);
+      } else {
+        const steps = piece.type === 'knight' ? KNIGHT_STEPS
+          : piece.type === 'bishop' ? BISHOP_STEPS
+            : piece.type === 'rook' ? ROOK_STEPS : KING_STEPS;
+        const sliding = ['bishop', 'rook', 'queen'].includes(piece.type);
+        for (const [dx, dy] of steps) {
+          for (let distance = 1; distance <= (sliding ? 7 : 1); distance += 1) {
+            const x2 = x1 + dx * distance;
+            const y2 = y1 + dy * distance;
+            if (!inBounds(x2, y2)) break;
+            targets.push([x2, y2]);
+            if (getPiece(pieces, x2, y2)) break;
           }
+        }
+        if (piece.type === 'king' && !piece.hasMoved) targets.push([x1, y1 - 2], [x1, y1 + 2]);
+      }
+      for (const [x2, y2] of targets) {
+        const from = { x: x1, y: y1 };
+        const to = { x: x2, y: y2 };
+        if (!isLegalMove(pieces, from, to, isWhiteTurn, enPassantTarget)) continue;
+
+        const target = getPiece(pieces, x2, y2);
+        const needsPromotion = piece.type === 'pawn' && (x2 === 0 || x2 === 7);
+        const baseMove = { from, to, capture: !!target || isEnPassant(pieces, from, to, enPassantTarget), needsPromotion };
+        if (needsPromotion) {
+          for (const promotionType of ['queen', 'rook', 'bishop', 'knight']) {
+            moves.push({ ...baseMove, promotionType });
+          }
+        } else {
+          moves.push(baseMove);
         }
       }
     }

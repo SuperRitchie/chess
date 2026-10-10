@@ -21,6 +21,17 @@ function play(pieces, from, to, enPassantTarget = null) {
 }
 
 describe('neural policy encoding', () => {
+  test('takes an immediate mate before model loading or policy pruning', async () => {
+    const pieces = {
+      '0-0': piece('black', 'king'),
+      '2-2': piece('white', 'king'),
+      '2-1': piece('white', 'queen'),
+    };
+    const predictBatch = jest.fn();
+    const chosen = await pickNNMove(pieces, 'white', null, 2, { predictBatch });
+    expect(chosen.to).toEqual({ x: 1, y: 1 });
+    expect(predictBatch).not.toHaveBeenCalled();
+  });
   test('promotion choices have distinct policy indices', () => {
     const base = {
       from: { x: 1, y: 0 },
@@ -97,7 +108,10 @@ describe('neural policy encoding', () => {
     );
 
     expect(chosen).not.toMatchObject({ from: { x: 1, y: 1 }, to: { x: 3, y: 1 } });
-    expect(predictBatch).toHaveBeenCalledTimes(3);
+    expect(predictBatch).toHaveBeenCalledTimes(2);
+    expect(predictBatch.mock.calls[1][0]).toHaveLength(
+      listLegalMoves(state.pieces, 'black', state.nextEnPassant).length,
+    );
     expect(predictBatch.mock.calls.some(([positions]) => positions.length > 1)).toBe(true);
   });
 });

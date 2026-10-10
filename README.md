@@ -1,12 +1,17 @@
 # Chess
 
-Playable at [ritchiek.tech/chess](https://superritchie.github.io/chess/).
+Playable at [ritchiek.tech/chess](https://ritchiek.tech/chess/)
 
 ## AI modes
 
-- **Random** chooses uniformly from legal moves.
-- **NN** uses a shallow negamax search with the neural value head at leaf positions.
-- **Neural MCTS** is AlphaZero-style PUCT with batched leaf evaluation, so the browser explores more positions inside a two-second move budget.
+- **Random** chooses uniformly from legal moves
+- **NN** batches the root policy and every child value, then uses them to guide a tactical negamax search
+- **Neural MCTS** uses PUCT with batched leaf evaluation and virtual loss, followed by the same tactical verification within its two-second search budget
+
+Both neural modes check for immediate mate before loading the model and consider every legal root move in tactical verification
+The verifier uses iterative deepening, searches quiet replies as well as captures, and extends capture sequences at its leaves
+An interrupted iteration is discarded so unchecked moves cannot beat completed evaluations
+Neural values provide a bounded tie-break between close positional scores rather than overriding a forced mate or material loss
 
 The policy/value network receives 18 feature planes: 12 piece planes, side to move, four castling-right planes, and the en-passant target. Its policy space represents normal moves plus queen, rook, bishop, and knight promotions separately.
 
@@ -15,16 +20,20 @@ The policy/value network receives 18 feature planes: 12 piece planes, side to mo
 Two serialized GitHub Actions workflows share the same model-training concurrency group:
 
 1. **Nightly NN training** downloads recent Lichess games, samples positions, evaluates uncached positions with Stockfish, and trains the value head alongside the existing self-play policy data.
-2. **Nightly policy-value self training** generates 16 games in parallel batches, retains up to 20,000 replay samples, and trains both heads from `(state, MCTS visit distribution, final outcome)` samples.
+2. **Nightly policy-value self training** attempts 32 games in parallel batches, retains up to 60,000 replay samples, and trains both heads from `(state, MCTS visit distribution, final outcome)` samples
 
-Each accepted run can train on up to 12,000 self-play positions and 12,000 Stockfish positions. Batched inference lets the workflow collect substantially more games while keeping the run bounded.
+Each run can train on up to 24,000 self-play positions and 32,000 Stockfish positions
 
 A candidate checkpoint replaces the current model only when:
 
-- it improves on the persistent holdout set, and
-- when a compatible baseline exists, it reaches the configured minimum score in a deterministic candidate-vs-baseline arena.
+- it improves the persistent holdout loss
+- its MCTS alignment improves without a top-move accuracy regression
+- when a compatible baseline exists, it meets the configured arena score and minimum number of decisive games
 
-Holdout positions are excluded from training. Accepted checkpoints preserve Adam optimizer state. Generated-model commits are ignored by the push-triggered training workflow so they do not start recursive training runs.
+Holdout positions are excluded from training and accepted checkpoints preserve Adam optimizer state
+Queued runs check out current master and staging rejects artifacts if inference code or accepted weights changed during training
+Rejected candidates publish replay data and merged history without replacing accepted model files
+Successful nightly workflows trigger deployment of current master so bot-generated model commits reach the playable site
 
 ## Local validation
 
@@ -37,19 +46,17 @@ CI=true npm test -- --watchAll=false
 npm run build
 ```
 
-## Useful training controls
+## Measure browser engine changes
 
-The workflows provide defaults, and the main controls can also be overridden locally:
+The benchmark uses the real TensorFlow.js model for both revisions and a Stockfish UCI executable to measure move quality
+Run it from the modified checkout with a baseline worktree and keep the model files identical
 
-- `AZ_SELF_PLAY_GAMES`
-- `AZ_SELF_PLAY_BATCH_SIZE`
-- `AZ_MCTS_SEARCHES`
-- `AZ_MAX_SELF_PLAY_SAMPLES`
-- `AZ_MAX_SELF_PLAY_TRAIN`
-- `AZ_MAX_STOCKFISH_TRAIN`
-- `AZ_SELF_PLAY_SEED`
-- `AZ_ARENA_GAMES`
-- `AZ_ARENA_SEARCHES`
-- `AZ_ARENA_MIN_SCORE`
-- `AZ_MIN_VALIDATION_IMPROVEMENT`
-- `SF_DEPTH`
+```bash
+git worktree add --detach ../chess-baseline a043cf96f9c25fb3b8971b3427f3dfe82a3c0ca5
+python scripts/benchmark_engines.py --baseline-source ../chess-baseline --stockfish stockfish --positions 24 --game-pairs 1 --output engine-benchmark.json
+```
+
+The JSON records FENs, chosen moves, approximate centipawn loss, timings, model identity, and search diagnostics
+Paired games swap the modified engine's color and save PGNs alongside the JSON
+Games that reach the ply limit remain unfinished and are excluded from scored results
+The harness runs TensorFlow.js on the Node CPU backend, so timings and search depth can differ from browser WebGL

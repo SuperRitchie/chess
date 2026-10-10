@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: master
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -41,6 +43,7 @@ jobs:
         run: python ml/self_play.py
       - name: Continue policy-value learning, evaluate, and export model
         env:
+          TRAIN_RUN_KIND: self_play
           TRAIN_SEED: ${{ github.run_number }}
           AZ_MAX_SELF_PLAY_TRAIN: "24000"
           AZ_MAX_STOCKFISH_TRAIN: "32000"

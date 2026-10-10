@@ -95,6 +95,20 @@ describe('neural PUCT MCTS', () => {
     expect(predictPolicyValueBatchForPositions).not.toHaveBeenCalled();
   });
 
+  test('considers the free queen capture even with zero tree iterations', async () => {
+    const pieces = {
+      '6-7': piece('white', 'king'),
+      '7-0': piece('white', 'rook'),
+      '0-4': piece('black', 'king'),
+      '0-0': piece('black', 'queen'),
+    };
+    const chosen = await pickMCTSMove(pieces, 'white', null, {
+      timeMs: 1000, maxIterations: 0,
+    });
+    expect(chosen.from).toEqual({ x: 7, y: 0 });
+    expect(chosen.to).toEqual({ x: 0, y: 0 });
+  });
+
   test('does not repeat the live early f-pawn regression', async () => {
     let state = makeMove(initialPieces(), { x: 6, y: 4 }, { x: 4, y: 4 });
     state = makeMove(state.pieces, { x: 1, y: 2 }, { x: 2, y: 2 }, null, state.nextEnPassant);
