@@ -1,0 +1,51 @@
+[Event "same model engine comparison"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "mcts after"]
+[Black "mcts before"]
+[Result "1-0"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"]
+[SetUp "1"]
+[Termination "CHECKMATE"]
+
+1... Na6 2. Bxa6 bxa6 3. Nf3 c5 4. O-O Bb7 5. Nc3 Nf6 6. e5 Bxf3 7. Qxf3 d5 8. exf6 exf6 9. Nxd5 c4 10. Qe4+ Be7 11. Nxe7 Qxe7 12. Qxa8+ Kd7 13. Qxh8 Qd6 14. Qxg7 Qxd2 15. Qxf7+ Kc6 16. Qxc4+ Kd6 17. Bxd2 a5 18. Qa6+ Kd7 19. Qxa7+ Ke6 20. a4 Kd6 21. Qxh7 Kc6 22. Qf5 Kd6 23. Rae1 Kc6 24. Re7 Kd6 25. Rf7 Kc6 26. b3 Kd6 27. c4 Kc6 28. Be3 Kd6 29. Qxf6# 1-0
+
+[Event "same model engine comparison"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "mcts before"]
+[Black "mcts after"]
+[Result "0-1"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"]
+[SetUp "1"]
+[Termination "CHECKMATE"]
+
+1... Nf6 2. Nf3 Nxe4 3. d4 Nc6 4. d5 Nb4 5. Nc3 Nxc3 6. bxc3 Na6 7. Bxa6 bxa6 8. O-O Bb7 9. Qd3 c5 10. Qf5 g6 11. Qxg6 hxg6 12. c4 Bg7 13. Rb1 Bc8 14. Re1 a5 15. a4 Bd4 16. Nxd4 cxd4 17. d6 e6 18. Rxe6+ fxe6 19. g4 Qh4 20. Bf4 g5 21. Rb6 Qxg4+ 22. Kh1 Qxf4 23. Kg1 axb6 24. Kh1 Qxh2# 0-1
+
+[Event "same model engine comparison"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "nn after"]
+[Black "nn before"]
+[Result "1-0"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"]
+[SetUp "1"]
+[Termination "CHECKMATE"]
+
+1... Nf6 2. Nc3 g6 3. e5 Bg7 4. exf6 Bxf6 5. Ne4 Be5 6. d4 Bg7 7. d5 Be5 8. Nf3 h6 9. Nxe5 Rg8 10. Bxh6 d6 11. Bb5+ c6 12. dxc6 bxc6 13. Nxc6 Nxc6 14. Bxc6+ Bd7 15. Bxa8 a6 16. Bd5 Bc8 17. O-O Rh8 18. Bg7 Rh7 19. Bd4 a5 20. a4 Bh3 21. gxh3 Kd7 22. Ng5 Qc7 23. Nxh7 Qb7 24. Bxb7 Ke6 25. Qg4+ f5 26. Qxg6+ Kd7 27. Qxf5+ Kc7 28. Qc8# 1-0
+
+[Event "same model engine comparison"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "nn before"]
+[Black "nn after"]
+[Result "0-1"]
+[FEN "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"]
+[SetUp "1"]
+[Termination "CHECKMATE"]
+
+1... Nf6 2. Nc3 Nc6 3. Nf3 Nb4 4. e5 Nfd5 5. Nxd5 Nxd5 6. c3 c5 7. Qa4 Rg8 8. Bc4 Nb6 9. Bxf7+ Kxf7 10. Qb3+ c4 11. Ng5+ Kg6 12. Qc2+ Kxg5 13. d3+ Kf5 14. g3 Kxe5 15. Bf4+ Kf6 16. Ke2 e5 17. Bxe5+ Kxe5 18. h4 cxd3+ 19. Kxd3 d5 20. Kd2 Bf5 21. Kd1 Bxc2+ 22. Kxc2 a5 23. Kd3 h5 24. Rhg1 Bc5 25. g4 Bxf2 26. b3 Qxh4 27. Rab1 Bxg1 28. Rc1 Qh3+ 29. Kd2 Be3+ 30. Kd1 Qf1+ 31. Kc2 Qxc1+ 32. Kd3 Qd2# 0-1

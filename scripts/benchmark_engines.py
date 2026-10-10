@@ -58,6 +58,17 @@ def model_hash():
     return digest.hexdigest()
 
 
+def source_hash(source):
+    digest = hashlib.sha256()
+    files = [source / "src/rules/chessRules.js"] + sorted(
+        path for path in (source / "src/ai").glob("*.js") if not path.name.endswith(".test.js")
+    )
+    for path in files:
+        digest.update(str(path.relative_to(source)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def select_positions(count):
     samples = json.loads((ROOT / "ml/data/fixed_eval_set_v3.json").read_text())
     fens = sorted({
@@ -172,6 +183,7 @@ def main():
             result["games"], pgn = play_games(before, after, args.game_pairs, args.max_plies, game_options)
             args.output.with_suffix(".pgn").write_text(pgn)
         result["model_sha256"] = model_hash()
+        result["source_sha256"] = {"before": source_hash(args.baseline_source), "after": source_hash(ROOT)}
         result["baseline_source_sha"] = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=args.baseline_source, text=True).strip() if (args.baseline_source / ".git").exists() else None
         result["source_diff_sha256"] = hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD"], cwd=ROOT)).hexdigest()
         result["settings"] = vars(args) | {"baseline_source": str(args.baseline_source), "output": str(args.output)}
