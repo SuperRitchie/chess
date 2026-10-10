@@ -567,6 +567,8 @@ def append_training_history(
     records = read_json_list(TRAINING_HISTORY)
     record = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
+        "run_kind": os.environ.get("TRAIN_RUN_KIND", "local"),
+        "run_id": os.environ.get("GITHUB_RUN_ID"),
         "policy_version": POLICY_VERSION,
         "feature_planes": PLANES,
         "resumed_from_checkpoint": resumed,

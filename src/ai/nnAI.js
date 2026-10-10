@@ -3,8 +3,8 @@ import { listLegalMoves, makeMove, getPiece, isKingInCheck } from '../rules/ches
 import {
   rankMoves,
   stabilizePolicyValue,
-  tacticalSearch,
 } from './chessHeuristics';
+import { findMateInOne, searchTacticalMoves } from './tacticalSearch';
 
 export const POLICY_CHANNELS = 5;
 export const POLICY_SIZE = 64 * 64 * POLICY_CHANNELS;
@@ -224,109 +224,39 @@ export async function pickNNMove(
   depth = 2,
   {
     predictBatch = predictPolicyValueBatchForPositions,
-    rootMoveLimit = 14,
-    replyLimit = 12,
-    tacticalCandidates = 6,
-    tacticalDepth = 2,
-    tacticalTimeMs = 700,
-    tacticalWeight = 0.45,
+    tacticalDepth = Math.max(1, depth + 1),
+    tacticalTimeMs = 1200,
+    maxNodes = 20000,
+    onSearchComplete,
   } = {},
 ) {
-  const [rawRoot] = await predictBatch([{ pieces, color, enPassantTarget }]);
-  const rootPrediction = stabilizePolicyValue(
-    pieces,
-    color,
-    enPassantTarget,
-    rawRoot,
-  );
-  const rootMoves = rankMoves(rootPrediction).slice(0, Math.max(1, rootMoveLimit));
-  if (rootMoves.length === 0) return null;
-  if (depth <= 1) return applyMove(pieces, rootMoves[0], enPassantTarget).move;
+  const legalMoves = listLegalMoves(pieces, color, enPassantTarget);
+  if (legalMoves.length === 0) return null;
+  const mate = findMateInOne(pieces, color, enPassantTarget, legalMoves);
+  if (mate) return applyMove(pieces, mate, enPassantTarget).move;
 
+  const [rawRoot] = await predictBatch([{ pieces, color, enPassantTarget }]);
+  const rootPrediction = stabilizePolicyValue(pieces, color, enPassantTarget, rawRoot);
+  const rootMoves = rankMoves(rootPrediction);
   const nextColor = color === 'white' ? 'black' : 'white';
-  const candidates = rootMoves.map((move) => ({
-    ...applyMove(pieces, move, enPassantTarget),
-    score: Infinity,
-  }));
-  const rawReplies = await predictBatch(candidates.map((candidate) => ({
+  const candidates = rootMoves.map((move) => applyMove(pieces, move, enPassantTarget));
+  const predictions = await predictBatch(candidates.map((candidate) => ({
     pieces: candidate.pieces,
     color: nextColor,
     enPassantTarget: candidate.nextEnPassant,
   })));
-  const leaves = [];
-
-  candidates.forEach((candidate, candidateIndex) => {
-    const replyPrediction = stabilizePolicyValue(
-      candidate.pieces,
-      nextColor,
-      candidate.nextEnPassant,
-      rawReplies[candidateIndex],
-    );
-    if (replyPrediction.legalMoves.length === 0) {
-      candidate.score = isKingInCheck(candidate.pieces, nextColor) ? 1 : 0;
-      return;
-    }
-
-    const replies = rankMoves(replyPrediction).slice(0, Math.max(1, replyLimit));
-    replies.forEach((reply) => {
-      const afterReply = applyMove(candidate.pieces, reply, candidate.nextEnPassant);
-      leaves.push({
-        candidateIndex,
-        pieces: afterReply.pieces,
-        color,
-        enPassantTarget: afterReply.nextEnPassant,
-      });
-    });
+  const neuralScores = new Map(candidates.map((candidate, index) => {
+    const value = predictions[index]?.value;
+    const prior = rootPrediction.priors.get(moveKey(candidate.move)) || 0;
+    return [moveKey(candidate.move), (Number.isFinite(value) ? -value : 0) + 0.15 * prior];
+  }));
+  const result = searchTacticalMoves(pieces, color, enPassantTarget, {
+    moves: rootMoves,
+    neuralScores,
+    timeMs: tacticalTimeMs,
+    maxDepth: tacticalDepth,
+    maxNodes,
   });
-
-  if (leaves.length > 0) {
-    const rawLeaves = await predictBatch(leaves);
-    leaves.forEach((leaf, leafIndex) => {
-      const leafPrediction = stabilizePolicyValue(
-        leaf.pieces,
-        leaf.color,
-        leaf.enPassantTarget,
-        rawLeaves[leafIndex],
-      );
-      candidates[leaf.candidateIndex].score = Math.min(
-        candidates[leaf.candidateIndex].score,
-        leafPrediction.value,
-      );
-    });
-  }
-
-  const scoredCandidates = candidates.map((candidate) => {
-    const moveId = moveKey(candidate.move);
-    const priorBonus = 0.1 * (rootPrediction.priors.get(moveId) || 0);
-    const positionalBonus = 0.04 * (rootPrediction.moveScores.get(moveId) || 0);
-    return { candidate, score: candidate.score + priorBonus + positionalBonus };
-  }).sort((first, second) => second.score - first.score);
-
-  const tacticalDeadline = Date.now() + Math.max(1, tacticalTimeMs);
-  const tacticalCache = new Map();
-  const verifyCount = Math.min(Math.max(1, tacticalCandidates), scoredCandidates.length);
-  for (let index = 0; index < verifyCount; index += 1) {
-    const item = scoredCandidates[index];
-    const tacticalScore = -tacticalSearch(
-      item.candidate.pieces,
-      nextColor,
-      item.candidate.nextEnPassant,
-      {
-        depth: tacticalDepth,
-        extensionBudget: 1,
-        maxMoves: 6,
-        maxNodes: 700,
-        deadline: tacticalDeadline,
-        cache: tacticalCache,
-      },
-    );
-    item.score = (1 - tacticalWeight) * item.score + tacticalWeight * tacticalScore;
-  }
-
-  const best = scoredCandidates.reduce(
-    (current, item) => (!current || item.score > current.score ? item : current),
-    null,
-  );
-
-  return best?.candidate.move || null;
+  onSearchComplete?.(result);
+  return result.move ? applyMove(pieces, result.move, enPassantTarget).move : null;
 }

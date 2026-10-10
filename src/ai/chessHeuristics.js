@@ -156,7 +156,7 @@ function mopUpScore(kings, material, endgameWeight) {
   return winner === 'white' ? score : -score;
 }
 
-function positionScoreCp(pieces, color) {
+export function positionScoreCp(pieces, color) {
   const undeveloped = {
     white: undevelopedMinorCount(pieces, 'white'),
     black: undevelopedMinorCount(pieces, 'black'),

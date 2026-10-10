@@ -7,8 +7,8 @@ import {
 import {
   positionKey,
   stabilizePolicyValue,
-  tacticalSearch,
 } from './chessHeuristics';
+import { findMateInOne, searchTacticalMoves } from './tacticalSearch';
 
 const DEFAULT_CPUCT = 1.5;
 
@@ -61,8 +61,8 @@ class Node {
     const parentVisits = Math.max(1, this.visitCount + this.virtualVisits);
 
     for (const child of this.children) {
-      const q = child.visitCount === 0 ? 0 : -child.meanValue;
       const effectiveVisits = child.visitCount + child.virtualVisits;
+      const q = effectiveVisits === 0 ? 0 : (-child.valueSum - child.virtualVisits) / effectiveVisits;
       const u = cpuct * child.prior * Math.sqrt(parentVisits) / (1 + effectiveVisits);
       const score = q + u;
       if (score > bestScore) {
@@ -198,34 +198,23 @@ export async function pickMCTSMove(
     maxIterations = 4096,
     batchSize = 16,
     cpuct = DEFAULT_CPUCT,
-    tacticalCandidates = 8,
-    tacticalDepth = 2,
-    tacticalReserveMs = 350,
-    tacticalWeight = 0.45,
+    tacticalDepth = 3,
+    tacticalReserveMs = 1000,
+    onSearchComplete,
   } = {},
 ) {
   const predictionCache = new Map();
   const rootPieces = clonePieces(pieces);
   const legalRootMoves = listLegalMoves(rootPieces, color, enPassantTarget);
   if (legalRootMoves.length === 0) return null;
-  for (const move of legalRootMoves) {
-    const promotion = move.promotionType || (move.needsPromotion ? 'queen' : null);
-    const result = makeMove(rootPieces, move.from, move.to, promotion, enPassantTarget);
-    if (terminalValue(result.pieces, opponent(color), result.nextEnPassant) === -1) {
-      return { ...move, promotionType: promotion };
-    }
-  }
+  const mate = findMateInOne(rootPieces, color, enPassantTarget, legalRootMoves);
+  if (mate) return mate;
 
   const root = new Node(null, rootPieces, color, enPassantTarget);
   const rootValue = await evaluateAndExpand(root, predictionCache);
   root.visitCount = 1;
   root.valueSum = rootValue;
   if (root.children.length === 0) return null;
-
-  const immediateMate = root.children.find(
-    (child) => terminalValue(child.pieces, child.toMove, child.enPassantTarget) === -1,
-  );
-  if (immediateMate) return immediateMate.move;
 
   const deadline = Date.now() + Math.max(1, timeMs);
   const searchDeadline = deadline - Math.min(Math.max(0, tacticalReserveMs), timeMs / 2);
@@ -240,7 +229,7 @@ export async function pickMCTSMove(
         node = node.selectChild(cpuct);
         if (!node) break;
       }
-      if (!node) break;
+      if (!node || selected.includes(node)) break;
       adjustVirtualVisits(node, 1);
       selected.push(node);
     }
@@ -254,42 +243,16 @@ export async function pickMCTSMove(
     iterations += selected.length;
   }
 
-  const visitBest = root.children.reduce((current, child) => {
-    if (!current) return child;
-    if (child.visitCount !== current.visitCount) {
-      return child.visitCount > current.visitCount ? child : current;
-    }
-    return child.meanValue < current.meanValue ? child : current;
-  }, null);
-
-  const finalists = [...root.children]
-    .sort((first, second) => second.visitCount - first.visitCount)
-    .slice(0, Math.max(1, tacticalCandidates));
-  const tacticalCache = new Map();
-  const scored = finalists.map((child) => {
-    const tacticalScore = -tacticalSearch(
-      child.pieces,
-      child.toMove,
-      child.enPassantTarget,
-      {
-        depth: tacticalDepth,
-        extensionBudget: 1,
-        maxMoves: 6,
-        maxNodes: 700,
-        deadline,
-        cache: tacticalCache,
-      },
-    );
-    const searchScore = child.visitCount === 0 ? 0 : -child.meanValue;
-    return {
-      child,
-      score: (1 - tacticalWeight) * searchScore + tacticalWeight * tacticalScore,
-    };
+  const neuralScores = new Map(root.children.map((child) => [
+    moveKey(child.move),
+    (child.visitCount === 0 ? rootValue : -child.meanValue) + 0.15 * child.prior,
+  ]));
+  const result = searchTacticalMoves(rootPieces, color, enPassantTarget, {
+    moves: root.children.map((child) => child.move),
+    neuralScores,
+    timeMs: Math.max(1, deadline - Date.now()),
+    maxDepth: tacticalDepth,
   });
-  const best = scored.reduce(
-    (current, item) => (!current || item.score > current.score ? item : current),
-    null,
-  )?.child || visitBest;
-
-  return best?.move || null;
+  onSearchComplete?.({ ...result, iterations, rootVisits: root.visitCount });
+  return result.move;
 }
