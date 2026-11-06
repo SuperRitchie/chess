@@ -75,6 +75,7 @@ function makeInitialState() {
     legalMoves: [],
     promotionPending: null,
     frozenForPromotion: false,
+    gameStatus: null,
     enPassantTarget: null,
     movesSAN: [],
     pieces: {
@@ -122,6 +123,7 @@ export default function ChessBoard() {
   const [legalMoves, setLegalMoves] = useState(initial.current.legalMoves);
   const [promotionPending, setPromotionPending] = useState(initial.current.promotionPending);
   const [frozenForPromotion, setFrozenForPromotion] = useState(initial.current.frozenForPromotion);
+  const [gameStatus, setGameStatus] = useState(initial.current.gameStatus);
   const [enPassantTarget, setEnPassantTarget] = useState(initial.current.enPassantTarget);
   const [movesSAN, setMovesSAN] = useState(initial.current.movesSAN);
   const [pieces, setPieces] = useState(initial.current.pieces);
@@ -155,6 +157,7 @@ export default function ChessBoard() {
     // but include for completeness
     promotionPending,
     frozenForPromotion,
+    gameStatus,
   });
 
   const restoreSnapshot = (snap) => {
@@ -166,6 +169,7 @@ export default function ChessBoard() {
     setLegalMoves(snap.legalMoves);
     setPromotionPending(snap.promotionPending);
     setFrozenForPromotion(snap.frozenForPromotion);
+    setGameStatus(snap.gameStatus);
   };
 
   const handleUndo = () => {
@@ -184,6 +188,7 @@ export default function ChessBoard() {
     setLegalMoves(fresh.legalMoves);
     setPromotionPending(fresh.promotionPending);
     setFrozenForPromotion(fresh.frozenForPromotion);
+    setGameStatus(fresh.gameStatus);
     setEnPassantTarget(fresh.enPassantTarget);
     setMovesSAN(fresh.movesSAN);
     setPieces(fresh.pieces);
@@ -297,9 +302,11 @@ export default function ChessBoard() {
     const anyMoves = hasAnyLegalMove(newPieces, side, nextEP);
     if (inCheck) playSound(check);
     if (!anyMoves && inCheck) {
-      alert(`${side} is checkmated!`);
+      setGameStatus(`${side} is checkmated`);
     } else if (!anyMoves && !inCheck) {
-      alert("Stalemate!");
+      setGameStatus("stalemate");
+    } else {
+      setGameStatus(null);
     }
   };
 
@@ -602,6 +609,7 @@ export default function ChessBoard() {
           <div className="turn-indicator">
             <b>Turn:</b> {sideToMoveLabel} {isThinking ? " (AI is thinking...)" : ""}
           </div>
+          {gameStatus && <div className="game-status" role="status">{gameStatus}</div>}
 
           <div className="mode-row">
             <div>
