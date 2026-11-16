@@ -1,5 +1,6 @@
 # ml/stockfish_eval.py
 """evaluate uncached positions and expert move policies with Stockfish"""
+import concurrent.futures
 import json
 import math
 import os
@@ -17,6 +18,7 @@ REPLAY_JSON = pathlib.Path("ml/data/replay_buffer.json")
 STOCKFISH = os.environ.get("STOCKFISH_PATH", "stockfish")
 DEPTH = int(os.environ.get("SF_DEPTH", "12"))
 MULTIPV = int(os.environ.get("SF_MULTIPV", "3"))
+MAX_ENGINE_RESTARTS = int(os.environ.get("SF_MAX_ENGINE_RESTARTS", "2"))
 POLICY_TEMPERATURE_CP = float(os.environ.get("SF_POLICY_TEMPERATURE_CP", "120"))
 MATE_SCORE = 100000
 
@@ -119,6 +121,49 @@ def analyse_position(engine: chess.engine.SimpleEngine, fen: str) -> dict:
     }
 
 
+def close_engine(engine, *, failed=False):
+    """Always release a dead process without letting quit hide the original failure."""
+    try:
+        if not failed:
+            engine.quit()
+    except (chess.engine.EngineTerminatedError, concurrent.futures.TimeoutError):
+        pass
+    finally:
+        engine.close()
+
+
+def evaluate_missing_positions(missing: list[str], cache: dict[str, dict]):
+    engine = None
+    restarts = 0
+    try:
+        for index, fen in enumerate(missing, start=1):
+            while True:
+                if engine is None:
+                    engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
+                try:
+                    cache[fen] = analyse_position(engine, fen)
+                    break
+                except (chess.engine.EngineTerminatedError, concurrent.futures.TimeoutError) as exc:
+                    close_engine(engine, failed=True)
+                    engine = None
+                    if restarts >= MAX_ENGINE_RESTARTS:
+                        raise RuntimeError(
+                            f"Stockfish restart budget exhausted at position {index}/{len(missing)}; "
+                            "refusing to publish a truncated label batch"
+                        ) from exc
+                    restarts += 1
+                    print(f"[stockfish] restarting engine ({restarts}/{MAX_ENGINE_RESTARTS}) "
+                          f"and retrying position {index}/{len(missing)}: {exc}")
+                except (chess.engine.EngineError, ValueError) as exc:
+                    print(f"[stockfish] failed position {index}/{len(missing)}: {exc}")
+                    break
+            if index % 200 == 0:
+                print(f"[stockfish] evaluated {index}/{len(missing)} new positions")
+    finally:
+        if engine is not None:
+            close_engine(engine)
+
+
 def main():
     fens = read_unique_fens()
     cache = read_cached_labels()
@@ -126,18 +171,7 @@ def main():
     print(f"[stockfish] positions {len(fens)}, cache hits {len(fens) - len(missing)}, new {len(missing)}")
 
     if missing:
-        engine = chess.engine.SimpleEngine.popen_uci(STOCKFISH)
-        try:
-            for index, fen in enumerate(missing, start=1):
-                try:
-                    cache[fen] = analyse_position(engine, fen)
-                except (chess.engine.EngineError, chess.engine.EngineTerminatedError, ValueError) as exc:
-                    print(f"[stockfish] failed position {index}/{len(missing)}: {exc}")
-                    continue
-                if index % 200 == 0:
-                    print(f"[stockfish] evaluated {index}/{len(missing)} new positions")
-        finally:
-            engine.quit()
+        evaluate_missing_positions(missing, cache)
 
     data = [cache[fen] for fen in fens if fen in cache and valid_policy(cache[fen])]
     if not data:
