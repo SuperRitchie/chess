@@ -41,7 +41,16 @@ jobs:
           AZ_START_POSITION_MAX_CP: "150"
           AZ_SELF_PLAY_SEED: ${{ github.run_number }}
         run: python ml/self_play.py
+      # This snapshot includes old replay rows; it is not a count of newly generated samples.
+      - name: Preserve generated self-play replay
+        uses: actions/upload-artifact@v7
+        with:
+          name: self-play-replay-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ml/data/self_play_buffer.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Continue policy-value learning, evaluate, and export model
+        id: train
         env:
           TRAIN_RUN_KIND: self_play
           TRAIN_SEED: ${{ github.run_number }}
@@ -52,15 +61,35 @@ jobs:
           CONTINUE_EPOCHS: "4"
           AZ_ARENA_GAMES: "48"
           AZ_ARENA_SEARCHES: "48"
-          AZ_ARENA_MAX_PLIES: "120"
+          AZ_ARENA_MAX_PLIES: "160"
           AZ_ARENA_MIN_SCORE: "0.50"
-          AZ_ARENA_MIN_DECISIVE_GAMES: "8"
-          AZ_ARENA_MAX_START_CP: "150"
+          AZ_ARENA_MIN_DECISIVE_GAMES: "12"
+          AZ_ARENA_MIN_DECISIVE_WIN_RATE_LCB: "0.50"
+          AZ_ARENA_BALANCED_FRACTION: "0.50"
+          AZ_ARENA_MIN_CONVERSION_CP: "200"
+          AZ_ARENA_MAX_START_CP: "800"
+          AZ_NN_EVAL_POSITIONS: "192"
+          AZ_MIN_NN_ALIGNMENT_IMPROVEMENT: "0.0001"
+          AZ_MIN_NN_TOP_MOVE_IMPROVEMENT: "0.0"
           AZ_MCTS_EVAL_POSITIONS: "192"
           AZ_MCTS_EVAL_SEARCHES: "64"
           AZ_MIN_MCTS_ALIGNMENT_IMPROVEMENT: "0.0001"
           AZ_MIN_MCTS_TOP_MOVE_IMPROVEMENT: "0.0"
-        run: python ml/train_safe_export.py
+        run: |
+          set -o pipefail
+          python ml/train_safe_export.py 2>&1 | tee "$RUNNER_TEMP/nightly-training.log"
+      - name: Preserve training evidence
+        if: ${{ always() && steps.train.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: self-play-training-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/nightly-training.log
+            ml/training_history.json
+            public/nn/model.json
+            public/nn/group*.bin
+          if-no-files-found: warn
+          retention-days: 14
       - name: Commit updated model state
         run: |
           git config user.name "github-actions[bot]"
